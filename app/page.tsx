@@ -2,6 +2,8 @@ import { getSheetsData } from "@/lib/sheets";
 import {
   calculateDashboardMetrics,
   groupByExecutive,
+  groupComplianceByManager,
+  groupComplianceByBusinessUnit,
 } from "@/lib/calculations";
 import { formatCurrency, formatNumber } from "@/lib/formatters";
 
@@ -29,9 +31,15 @@ export default async function HomePage() {
 
   const tickets = data.Tickets_Processed || [];
   const alerts = data.Alertas_Activas || [];
+  const teamMapping = data.Team_Mapping || [];
 
   const metrics = calculateDashboardMetrics(tickets);
   const executives = groupByExecutive(tickets).slice(0, 12);
+  const complianceByManager = groupComplianceByManager(tickets, teamMapping);
+  const complianceByBusinessUnit = groupComplianceByBusinessUnit(
+    tickets,
+    teamMapping
+  );
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -236,6 +244,20 @@ export default async function HomePage() {
             </div>
           </div>
         </section>
+
+        <section className="mt-8 grid gap-6 lg:grid-cols-2">
+          <ComplianceCard
+            title="Cumplimiento por equipo gestor"
+            description="Tickets gestionados frente a la meta esperada a la fecha."
+            rows={complianceByManager}
+          />
+
+          <ComplianceCard
+            title="Cumplimiento por unidad de negocio"
+            description="Avance de cumplimiento agrupado por unidad de negocio."
+            rows={complianceByBusinessUnit}
+          />
+        </section>
       </section>
     </main>
   );
@@ -257,6 +279,72 @@ function AlertDetail({ label, value }: { label: string; value: string }) {
         {label}
       </p>
       <p className="mt-1 truncate font-medium text-slate-200">{value}</p>
+    </div>
+  );
+}
+
+function ComplianceCard({
+  title,
+  description,
+  rows,
+}: {
+  title: string;
+  description: string;
+  rows: Array<{
+    name: string;
+    actual: number;
+    target: number;
+    complianceRate: number;
+  }>;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <p className="mt-1 text-sm text-slate-400">{description}</p>
+      </div>
+
+      <div className="space-y-4">
+        {rows.map((row) => {
+          const progress = Math.min(row.complianceRate, 100);
+
+          return (
+            <div
+              key={row.name}
+              className="rounded-xl border border-slate-800 bg-slate-950 p-4"
+            >
+              <div className="mb-3 flex items-start justify-between gap-4">
+                <div>
+                  <p className="font-medium text-white">{row.name}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {formatNumber(row.actual)} tickets / meta{" "}
+                    {formatNumber(row.target)}
+                  </p>
+                </div>
+
+                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-300">
+                  {row.complianceRate}%
+                </span>
+              </div>
+
+              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-emerald-400"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+
+        {rows.length === 0 && (
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center">
+            <p className="text-sm text-slate-400">
+              Sin datos disponibles para calcular cumplimiento.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
