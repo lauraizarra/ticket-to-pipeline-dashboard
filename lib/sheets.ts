@@ -17,8 +17,13 @@ export async function getSheetsData(): Promise<SheetsPayload> {
     throw new Error("Missing Sheets Web App configuration");
   }
 
-  const response = await fetch(`${baseUrl}?token=${encodeURIComponent(token)}`, {
-    next: { revalidate: 86400 },
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  const requestUrl = `${baseUrl}${separator}token=${encodeURIComponent(
+    token
+  )}&ts=${Date.now()}`;
+
+  const response = await fetch(requestUrl, {
+    cache: "no-store",
   });
 
   if (!response.ok) {

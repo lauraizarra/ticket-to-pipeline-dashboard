@@ -1,31 +1,124 @@
+function normalizeText(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .toUpperCase()
+    .trim();
+}
+
 function toNumber(value: unknown): number {
   if (value === null || value === undefined) return 0;
 
-  const cleaned = String(value)
+  let cleaned = String(value)
+    .replace(/US\$/gi, "")
+    .replace(/USD/gi, "")
     .replace(/\$/g, "")
-    .replace(/US\$/g, "")
-    .replace(/USD/g, "")
-    .replace(/,/g, "")
     .replace(/%/g, "")
+    .replace(/\s/g, "")
     .trim();
+
+  if (!cleaned) return 0;
+
+  const hasComma = cleaned.includes(",");
+  const hasDot = cleaned.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = cleaned.lastIndexOf(",");
+    const lastDot = cleaned.lastIndexOf(".");
+
+    if (lastComma > lastDot) {
+      cleaned = cleaned.replace(/\./g, "").replace(",", ".");
+    } else {
+      cleaned = cleaned.replace(/,/g, "");
+    }
+  } else if (hasComma && !hasDot) {
+    const commaParts = cleaned.split(",");
+
+    if (commaParts.length === 2 && commaParts[1].length <= 2) {
+      cleaned = cleaned.replace(",", ".");
+    } else {
+      cleaned = cleaned.replace(/,/g, "");
+    }
+  } else if (hasDot && !hasComma) {
+    const dotParts = cleaned.split(".");
+
+    if (dotParts.length > 2) {
+      cleaned = cleaned.replace(/\./g, "");
+    } else if (dotParts.length === 2 && dotParts[1].length === 3) {
+      cleaned = cleaned.replace(/\./g, "");
+    }
+  }
 
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isTrue(value: unknown): boolean {
-  const text = String(value).toUpperCase().trim();
-  return text === "TRUE" || text === "VERDADERO" || text === "SI" || text === "SÍ";
+  const text = normalizeText(value);
+
+  return (
+    text === "TRUE" ||
+    text === "VERDADERO" ||
+    text === "SI" ||
+    text === "YES" ||
+    text === "1" ||
+    text === "Y"
+  );
+}
+
+function getField(row: Record<string, string>, possibleNames: string[]) {
+  const entries = Object.entries(row).map(([key, value]) => ({
+    key,
+    normalizedKey: normalizeText(key),
+    compactKey: normalizeText(key).replace(/[^A-Z0-9]/g, ""),
+    value,
+  }));
+
+  for (const name of possibleNames) {
+    if (row[name] !== undefined && String(row[name]).trim() !== "") {
+      return row[name];
+    }
+
+    const normalizedName = normalizeText(name);
+    const compactName = normalizedName.replace(/[^A-Z0-9]/g, "");
+
+    const exactMatch = entries.find(
+      (entry) =>
+        entry.normalizedKey === normalizedName &&
+        String(entry.value || "").trim() !== ""
+    );
+
+    if (exactMatch) return exactMatch.value;
+
+    const compactMatch = entries.find(
+      (entry) =>
+        entry.compactKey === compactName &&
+        String(entry.value || "").trim() !== ""
+    );
+
+    if (compactMatch) return compactMatch.value;
+  }
+
+  return "";
 }
 
 function getPipelineAmount(ticket: Record<string, string>): number {
   return toNumber(
-    ticket["Pipeline Asociado"] ||
-      ticket["Pipeline asociado"] ||
-      ticket["pipeline asociado"] ||
-      ticket["Deal Amount"] ||
-      ticket["Amount"] ||
-      0
+    getField(ticket, [
+      "Pipeline Asociado",
+      "Pipeline asociado",
+      "Pipeline",
+      "Associated Pipeline",
+      "Pipeline asociado USD",
+      "Deal Amount",
+      "Amount",
+      "Monto",
+      "Valor del negocio",
+      "Net Revenue",
+      "NR",
+      "Pipeline Amount",
+    ])
   );
 }
 
@@ -37,18 +130,8 @@ function getComplianceRate(actual: number, target: number): number {
   return target > 0 ? Math.round((actual / target) * 100) : 0;
 }
 
-function getField(row: Record<string, string>, possibleNames: string[]) {
-  for (const name of possibleNames) {
-    if (row[name] !== undefined && row[name] !== "") {
-      return row[name];
-    }
-  }
-
-  return "";
-}
-
 function normalizeTeam(value: string) {
-  const text = String(value).toUpperCase().trim();
+  const text = normalizeText(value);
 
   if (text.includes("TAM") || text.includes("FINOPS")) return "TAM - FINOPS";
   if (text.includes("COM")) return "COM";
@@ -58,41 +141,361 @@ function normalizeTeam(value: string) {
 }
 
 function shouldIncludeRow(row: Record<string, string>) {
-  const region =
-    row["Región Mapeada"] ||
-    row["Región"] ||
-    row["Region"] ||
-    "";
+  const region = getField(row, ["Región Mapeada", "Región", "Region"]);
 
-  const included =
-    row["En meta"] ||
-    row["Incluido en meta"] ||
-    "TRUE";
+  const included = getField(row, [
+    "En meta",
+    "Incluido en meta",
+    "Incluido",
+    "Included",
+  ]);
 
-  return region !== "SNAP" && isTrue(included);
+  return region !== "SNAP" && isTrue(included || "TRUE");
+}
+
+function getExecutiveName(row: Record<string, string>) {
+  return (
+    getField(row, [
+      "Ejecutivo",
+      "Nombre completo",
+      "Executive",
+      "Owner",
+      "Responsable",
+      "Ticket Owner",
+      "Propietario",
+      "Propietario del Ticket",
+      "Propietario del ticket",
+      "Owner Name",
+      "Owner name",
+      "Nombre ejecutivo",
+      "Executive Name",
+      "Name",
+      "Nombre",
+    ]) || "No mapeado"
+  );
+}
+
+function getBusinessUnit(row: Record<string, string>) {
+  return (
+    getField(row, [
+      "Unidad de Negocio Mapeada",
+      "Unidad de Negocio",
+      "Unidad de negocio",
+      "Business Unit",
+      "BU",
+      "Unidad",
+    ]) || "No mapeado"
+  );
+}
+
+function getRegion(row: Record<string, string>) {
+  return getField(row, ["Región Mapeada", "Región", "Region"]) || "Sin región";
+}
+
+function getTeam(row: Record<string, string>) {
+  return getField(row, ["Equipo", "Gestionado por", "Team"]) || "Sin equipo";
+}
+
+function getExecutiveTarget(
+  executive: string,
+  teamMapping: Record<string, string>[] = [],
+  goalsConfig: Record<string, string>[] = [],
+  dashboardRows: Record<string, string>[] = []
+) {
+  const normalizedExecutive = normalizeText(executive);
+  const sourceRows = [...teamMapping, ...goalsConfig, ...dashboardRows];
+
+  const matchingRows = sourceRows.filter((row) => {
+    const rowExecutive = normalizeText(
+      getField(row, [
+        "Ejecutivo",
+        "Nombre completo",
+        "Executive",
+        "Owner",
+        "Responsable",
+        "Ticket Owner",
+        "Propietario",
+        "Propietario del Ticket",
+        "Propietario del ticket",
+        "Owner Name",
+        "Owner name",
+        "Nombre",
+        "Name",
+        "Nombre ejecutivo",
+        "Executive Name",
+      ])
+    );
+
+    const active = getField(row, ["Activo", "active"]);
+    const included = getField(row, ["Incluido en meta", "En meta", "Included"]);
+    const region = getField(row, ["Región", "Region", "Región Mapeada"]);
+
+    return (
+      rowExecutive === normalizedExecutive &&
+      region !== "SNAP" &&
+      isTrue(active || "TRUE") &&
+      isTrue(included || "TRUE")
+    );
+  });
+
+  return matchingRows.reduce((sum, row) => {
+    const target = toNumber(
+      getField(row, [
+        "Meta esperada a la fecha",
+        "Meta Esperada a la Fecha",
+        "Meta esperada",
+        "Meta a la fecha",
+        "Meta 6M",
+        "Meta 6 meses",
+        "Meta semestral",
+        "Meta Semestral",
+        "Meta prorrateada",
+        "Meta prorrateada 6M",
+        "Meta restante",
+        "Meta anual",
+        "Meta",
+        "Goal",
+        "Target 6M",
+        "Target",
+        "Objetivo",
+      ])
+    );
+
+    return sum + target;
+  }, 0);
+}
+
+function isConverted(ticket: Record<string, string>) {
+  const status = normalizeText(
+    getField(ticket, [
+      "Estado del ticket",
+      "Estado",
+      "Ticket Status",
+      "Status",
+      "Estado ticket",
+      "Estado General",
+    ])
+  );
+
+  const convertedFlag = getField(ticket, [
+    "Convertido",
+    "Converted",
+    "Is Converted",
+    "Ticket convertido",
+  ]);
+
+  return isTrue(convertedFlag) || status.includes("CONVERT");
+}
+
+function isDiscarded(ticket: Record<string, string>) {
+  const status = normalizeText(
+    getField(ticket, [
+      "Estado del ticket",
+      "Estado",
+      "Ticket Status",
+      "Status",
+      "Estado ticket",
+      "Estado General",
+    ])
+  );
+
+  const discardedFlag = getField(ticket, [
+    "Descartado",
+    "Discarded",
+    "Is Discarded",
+    "Ticket descartado",
+  ]);
+
+  return (
+    isTrue(discardedFlag) ||
+    status.includes("DESCART") ||
+    status.includes("CANCEL") ||
+    status.includes("CERRADO SIN") ||
+    status.includes("CLOSED LOST") ||
+    status.includes("NO AVANZA")
+  );
+}
+
+function isExpired(ticket: Record<string, string>) {
+  const sla = normalizeText(getField(ticket, ["Estado SLA", "SLA Status"]));
+  const alert = normalizeText(
+    getField(ticket, [
+      "Tipo alerta",
+      "Tipo de alerta",
+      "Alert Type",
+      "Alerta activa",
+    ])
+  );
+
+  return (
+    sla === "EXPIRADO" ||
+    sla.includes("EXPIRADO") ||
+    alert.includes("EXPIR") ||
+    alert.includes("5+") ||
+    alert.includes("ALERTA")
+  );
+}
+
+function isExpiring(ticket: Record<string, string>) {
+  const sla = normalizeText(getField(ticket, ["Estado SLA", "SLA Status"]));
+  const alert = normalizeText(
+    getField(ticket, ["Tipo alerta", "Tipo de alerta", "Alert Type"])
+  );
+
+  return (
+    sla.includes("POR EXPIRAR") ||
+    alert.includes("3/4") ||
+    alert.includes("POR EXPIRAR")
+  );
+}
+
+function getTicketBucket(ticket: Record<string, string>) {
+  if (isConverted(ticket)) return "converted";
+  if (isDiscarded(ticket)) return "discarded";
+  if (isExpired(ticket)) return "expired";
+  return "waiting";
+}
+
+export type TicketDetail = {
+  id: string;
+  name: string;
+  company: string;
+  description: string;
+  executive: string;
+  team: string;
+  region: string;
+  businessUnit: string;
+  slaStatus: string;
+  days: string;
+  pipeline: number;
+  url: string;
+  status: "converted" | "waiting" | "expired" | "discarded";
+};
+
+export type ExecutivePerformance = {
+  executive: string;
+  team: string;
+  region: string;
+  businessUnit: string;
+  tickets: number;
+  converted: number;
+  waiting: number;
+  expired: number;
+  expiring: number;
+  discarded: number;
+  pipeline: number;
+  target6M: number;
+  conversionRate: number;
+  complianceRate: number;
+  details: {
+    converted: TicketDetail[];
+    waiting: TicketDetail[];
+    expired: TicketDetail[];
+    discarded: TicketDetail[];
+  };
+};
+
+function buildTicketDetail(ticket: Record<string, string>): TicketDetail {
+  return {
+    id: getField(ticket, [
+      "Ticket ID",
+      "ID Ticket",
+      "Record ID",
+      "ID",
+      "hs_object_id",
+      "HS Object ID",
+    ]),
+    name:
+      getField(ticket, [
+        "Nombre del ticket",
+        "Ticket",
+        "Ticket Name",
+        "Asunto",
+        "Subject",
+        "Name",
+        "Nombre",
+      ]) || "Ticket sin nombre",
+    company:
+      getField(ticket, [
+        "Empresa",
+        "Empresa asociada",
+        "Nombre de empresa",
+        "Nombre de la empresa",
+        "Compañía",
+        "Compania",
+        "Company",
+        "Company Name",
+        "Associated Company",
+        "Associated company",
+        "Cuenta",
+        "Account",
+        "Cliente",
+        "Client",
+        "Company associated",
+      ]) || "Sin empresa",
+    description: getField(ticket, [
+      "Descripción del Ticket",
+      "Descripción del ticket",
+      "Descripcion del Ticket",
+      "Descripcion del ticket",
+      "Descripción Ticket",
+      "Descripcion Ticket",
+      "Descripción",
+      "Descripcion",
+      "Ticket Description",
+      "Ticket description",
+      "Description",
+      "description",
+      "Contenido",
+      "Content",
+      "Detalle",
+      "Detalle del ticket",
+      "Resumen",
+      "Notas",
+      "Notes",
+      "Body",
+      "Mensaje",
+      "Message",
+      "Texto",
+      "Ticket Body",
+    ]),
+    executive: getExecutiveName(ticket),
+    team: getTeam(ticket),
+    region: getRegion(ticket),
+    businessUnit: getBusinessUnit(ticket),
+    slaStatus: getField(ticket, ["Estado SLA", "SLA Status"]) || "Sin SLA",
+    days: getField(ticket, [
+      "Días desde creación",
+      "Días",
+      "Dias",
+      "Days",
+      "Días abierto",
+      "Dias abierto",
+      "Days Open",
+    ]),
+    pipeline: getPipelineAmount(ticket),
+    url: getField(ticket, [
+      "Link HubSpot",
+      "Ticket URL",
+      "URL Ticket",
+      "HubSpot URL",
+      "URL",
+    ]),
+    status: getTicketBucket(ticket),
+  };
 }
 
 export function calculateDashboardMetrics(tickets: Record<string, string>[]) {
   const validTickets = tickets.filter(shouldIncludeRow);
 
   const totalTickets = validTickets.length;
-
-  const converted = validTickets.filter((ticket) =>
-    isTrue(ticket["Convertido"])
-  ).length;
-
-  const expiring = validTickets.filter(
-    (ticket) => ticket["Estado SLA"] === "Por expirar"
-  ).length;
-
-  const expired = validTickets.filter(
-    (ticket) => ticket["Estado SLA"] === "Expirado"
-  ).length;
+  const converted = validTickets.filter(isConverted).length;
+  const discarded = validTickets.filter(isDiscarded).length;
+  const expiring = validTickets.filter(isExpiring).length;
+  const expired = validTickets.filter(isExpired).length;
 
   const pending = validTickets.filter(
-    (ticket) =>
-      ticket["Estado SLA"] === "En tiempo" ||
-      ticket["Estado SLA"] === "Por expirar"
+    (ticket) => !isConverted(ticket) && !isDiscarded(ticket)
   ).length;
 
   const pipeline = validTickets.reduce((sum, ticket) => {
@@ -104,6 +507,7 @@ export function calculateDashboardMetrics(tickets: Record<string, string>[]) {
   return {
     totalTickets,
     converted,
+    discarded,
     expiring,
     expired,
     pending,
@@ -112,64 +516,77 @@ export function calculateDashboardMetrics(tickets: Record<string, string>[]) {
   };
 }
 
-export function groupByExecutive(tickets: Record<string, string>[]) {
-  const map = new Map<
-    string,
-    {
-      executive: string;
-      team: string;
-      region: string;
-      businessUnit: string;
-      tickets: number;
-      converted: number;
-      expired: number;
-      expiring: number;
-      pipeline: number;
-      conversionRate: number;
-    }
-  >();
+export function groupByExecutive(
+  tickets: Record<string, string>[],
+  teamMapping: Record<string, string>[] = [],
+  goalsConfig: Record<string, string>[] = [],
+  dashboardRows: Record<string, string>[] = []
+): ExecutivePerformance[] {
+  const map = new Map<string, ExecutivePerformance>();
 
   tickets.filter(shouldIncludeRow).forEach((ticket) => {
-    const executive = ticket["Ejecutivo"] || "No mapeado";
+    const executive = getExecutiveName(ticket);
 
     if (!map.has(executive)) {
       map.set(executive, {
         executive,
-        team: ticket["Equipo"] || "",
-        region: ticket["Región Mapeada"] || "",
-        businessUnit: ticket["Unidad de Negocio Mapeada"] || "",
+        team: getTeam(ticket),
+        region: getRegion(ticket),
+        businessUnit: getBusinessUnit(ticket),
         tickets: 0,
         converted: 0,
+        waiting: 0,
         expired: 0,
         expiring: 0,
+        discarded: 0,
         pipeline: 0,
+        target6M: getExecutiveTarget(
+          executive,
+          teamMapping,
+          goalsConfig,
+          dashboardRows
+        ),
         conversionRate: 0,
+        complianceRate: 0,
+        details: {
+          converted: [],
+          waiting: [],
+          expired: [],
+          discarded: [],
+        },
       });
     }
 
     const row = map.get(executive)!;
+    const detail = buildTicketDetail(ticket);
 
     row.tickets += 1;
+    row.pipeline += getPipelineAmount(ticket);
 
-    if (isTrue(ticket["Convertido"])) {
-      row.converted += 1;
-    }
-
-    if (ticket["Estado SLA"] === "Expirado") {
-      row.expired += 1;
-    }
-
-    if (ticket["Estado SLA"] === "Por expirar") {
+    if (isExpiring(ticket)) {
       row.expiring += 1;
     }
 
-    row.pipeline += getPipelineAmount(ticket);
+    if (detail.status === "converted") {
+      row.converted += 1;
+      row.details.converted.push(detail);
+    } else if (detail.status === "discarded") {
+      row.discarded += 1;
+      row.details.discarded.push(detail);
+    } else if (detail.status === "expired") {
+      row.expired += 1;
+      row.details.expired.push(detail);
+    } else {
+      row.waiting += 1;
+      row.details.waiting.push(detail);
+    }
   });
 
   return Array.from(map.values())
     .map((row) => ({
       ...row,
       conversionRate: getConversionRate(row.converted, row.tickets),
+      complianceRate: getComplianceRate(row.tickets, row.target6M),
     }))
     .sort((a, b) => {
       if (b.pipeline !== a.pipeline) return b.pipeline - a.pipeline;
@@ -185,7 +602,7 @@ export function groupComplianceByManager(
   const targets = new Map<string, number>();
 
   tickets.filter(shouldIncludeRow).forEach((ticket) => {
-    const team = normalizeTeam(ticket["Equipo"] || ticket["Gestionado por"] || "");
+    const team = normalizeTeam(getTeam(ticket));
     actuals.set(team, (actuals.get(team) || 0) + 1);
   });
 
@@ -193,27 +610,38 @@ export function groupComplianceByManager(
     .filter((row) => {
       const active = getField(row, ["Activo", "active"]);
       const included = getField(row, ["Incluido en meta", "En meta"]);
-      const region = getField(row, ["Región", "Region"]);
+      const region = getField(row, ["Región", "Region", "Región Mapeada"]);
 
-      return region !== "SNAP" && isTrue(active || "TRUE") && isTrue(included || "TRUE");
+      return (
+        region !== "SNAP" &&
+        isTrue(active || "TRUE") &&
+        isTrue(included || "TRUE")
+      );
     })
     .forEach((row) => {
-      const team = normalizeTeam(getField(row, ["Equipo", "Gestionado por"]));
+      const team = normalizeTeam(getTeam(row));
+
       const target = toNumber(
         getField(row, [
           "Meta esperada a la fecha",
           "Meta Esperada a la Fecha",
           "Meta esperada",
           "Meta a la fecha",
+          "Meta 6M",
+          "Meta 6 meses",
+          "Meta semestral",
+          "Target 6M",
+          "Target",
+          "Meta",
         ])
       );
 
       targets.set(team, (targets.get(team) || 0) + target);
     });
 
-  const names = Array.from(new Set([...actuals.keys(), ...targets.keys()])).filter(
-    (name) => name && name !== "No mapeado"
-  );
+  const names = Array.from(
+    new Set([...actuals.keys(), ...targets.keys()])
+  ).filter((name) => name && name !== "No mapeado");
 
   return names
     .map((name) => {
@@ -238,11 +666,7 @@ export function groupComplianceByBusinessUnit(
   const targets = new Map<string, number>();
 
   tickets.filter(shouldIncludeRow).forEach((ticket) => {
-    const businessUnit =
-      ticket["Unidad de Negocio Mapeada"] ||
-      ticket["Unidad de Negocio"] ||
-      "No mapeado";
-
+    const businessUnit = getBusinessUnit(ticket);
     actuals.set(businessUnit, (actuals.get(businessUnit) || 0) + 1);
   });
 
@@ -250,16 +674,16 @@ export function groupComplianceByBusinessUnit(
     .filter((row) => {
       const active = getField(row, ["Activo", "active"]);
       const included = getField(row, ["Incluido en meta", "En meta"]);
-      const region = getField(row, ["Región", "Region"]);
+      const region = getField(row, ["Región", "Region", "Región Mapeada"]);
 
-      return region !== "SNAP" && isTrue(active || "TRUE") && isTrue(included || "TRUE");
+      return (
+        region !== "SNAP" &&
+        isTrue(active || "TRUE") &&
+        isTrue(included || "TRUE")
+      );
     })
     .forEach((row) => {
-      const businessUnit = getField(row, [
-        "Unidad de Negocio",
-        "Unidad de Negocio Mapeada",
-        "Unidad de negocio",
-      ]);
+      const businessUnit = getBusinessUnit(row);
 
       const target = toNumber(
         getField(row, [
@@ -267,6 +691,12 @@ export function groupComplianceByBusinessUnit(
           "Meta Esperada a la Fecha",
           "Meta esperada",
           "Meta a la fecha",
+          "Meta 6M",
+          "Meta 6 meses",
+          "Meta semestral",
+          "Target 6M",
+          "Target",
+          "Meta",
         ])
       );
 
@@ -275,9 +705,9 @@ export function groupComplianceByBusinessUnit(
       }
     });
 
-  const names = Array.from(new Set([...actuals.keys(), ...targets.keys()])).filter(
-    (name) => name && name !== "No mapeado"
-  );
+  const names = Array.from(
+    new Set([...actuals.keys(), ...targets.keys()])
+  ).filter((name) => name && name !== "No mapeado");
 
   return names
     .map((name) => {
