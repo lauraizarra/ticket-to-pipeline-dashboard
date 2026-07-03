@@ -3,8 +3,9 @@ import {
   calculateDashboardMetrics,
   groupByExecutive,
   groupComplianceByManager,
-  groupComplianceByBusinessUnit,
+  groupComplianceByRegion,
   type ExecutivePerformance,
+  type RegionalCompliance,
   type TicketDetail,
 } from "@/lib/calculations";
 import { formatCurrency, formatNumber } from "@/lib/formatters";
@@ -65,6 +66,7 @@ export default async function HomePage() {
   const dashboardRows = data.Dashboard || [];
 
   const metrics = calculateDashboardMetrics(tickets);
+
   const executives = groupByExecutive(
     tickets,
     teamMapping,
@@ -73,10 +75,7 @@ export default async function HomePage() {
   ).slice(0, 12);
 
   const complianceByManager = groupComplianceByManager(tickets, teamMapping);
-  const complianceByBusinessUnit = groupComplianceByBusinessUnit(
-    tickets,
-    teamMapping
-  );
+  const complianceByRegion = groupComplianceByRegion(tickets, goalsConfig);
 
   return (
     <main className="min-h-screen bg-[#020817] text-white">
@@ -193,10 +192,10 @@ export default async function HomePage() {
             rows={complianceByManager}
           />
 
-          <ComplianceCard
-            title="Cumplimiento por unidad de negocio"
-            description="Avance de cumplimiento agrupado por unidad de negocio."
-            rows={complianceByBusinessUnit}
+          <RegionalComplianceCard
+            title="Cumplimiento regional"
+            description="Avance por región comparando tickets gestionados y pipeline asociado frente a la meta regional."
+            rows={complianceByRegion}
           />
         </section>
       </section>
@@ -544,6 +543,100 @@ function ComplianceCard({
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center">
             <p className="text-sm text-slate-400">
               Sin datos disponibles para calcular cumplimiento.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RegionalComplianceCard({
+  title,
+  description,
+  rows,
+}: {
+  title: string;
+  description: string;
+  rows: RegionalCompliance[];
+}) {
+  return (
+    <div className="rounded-3xl border border-cyan-400/15 bg-slate-900/80 p-5 shadow-[0_0_32px_rgba(34,211,238,0.06)]">
+      <div className="mb-4">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <p className="mt-1 text-sm text-slate-400">{description}</p>
+      </div>
+
+      <div className="space-y-4">
+        {rows.map((row) => {
+          const ticketStyle = getComplianceStyle(row.ticketComplianceRate);
+          const pipelineStyle = getComplianceStyle(row.pipelineComplianceRate);
+          const ticketProgress = Math.min(row.ticketComplianceRate, 100);
+          const pipelineProgress = Math.min(row.pipelineComplianceRate, 100);
+
+          return (
+            <div
+              key={row.name}
+              className="rounded-2xl border border-slate-800 bg-slate-950 p-4"
+            >
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <p className="font-medium text-white">{row.name}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    Tickets y pipeline asociado frente a meta regional.
+                  </p>
+                </div>
+
+                <span
+                  className={`rounded-full border px-3 py-1 text-sm font-medium ${ticketStyle.pill}`}
+                >
+                  {row.ticketComplianceRate}%
+                </span>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+                    <span>
+                      Tickets: {formatNumber(row.actualTickets)} /{" "}
+                      {formatNumber(row.targetTickets)}
+                    </span>
+                    <span>{row.ticketComplianceRate}%</span>
+                  </div>
+
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                    <div
+                      className={`h-full rounded-full ${ticketStyle.bar}`}
+                      style={{ width: `${ticketProgress}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+                    <span>
+                      Pipeline: {formatCompactCurrency(row.actualPipeline)} /{" "}
+                      {formatCompactCurrency(row.targetPipeline)}
+                    </span>
+                    <span>{row.pipelineComplianceRate}%</span>
+                  </div>
+
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                    <div
+                      className={`h-full rounded-full ${pipelineStyle.bar}`}
+                      style={{ width: `${pipelineProgress}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {rows.length === 0 && (
+          <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center">
+            <p className="text-sm text-slate-400">
+              Sin datos disponibles para calcular cumplimiento regional.
             </p>
           </div>
         )}

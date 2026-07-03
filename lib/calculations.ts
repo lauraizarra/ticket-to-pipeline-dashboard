@@ -356,6 +356,63 @@ function getTicketBucket(ticket: Record<string, string>) {
   return "waiting";
 }
 
+function buildRegionalTargets(goalsConfig: Record<string, string>[]) {
+  const targets = new Map<
+    string,
+    {
+      targetTickets: number;
+      targetPipeline: number;
+      hasSubtotal: boolean;
+    }
+  >();
+
+  let currentRegion = "";
+
+  goalsConfig.forEach((row) => {
+    const explicitRegion = getField(row, ["Región", "Region"]);
+    if (explicitRegion) currentRegion = explicitRegion;
+
+    const region = currentRegion;
+    if (!region) return;
+
+    const role = normalizeText(getField(row, ["Rol", "Role", "Equipo"]));
+
+    if (role.includes("GRAN TOTAL")) return;
+
+    const ticketsTarget = toNumber(
+      getField(row, ["Cantidad", "Tickets", "Meta tickets", "Ticket Target"])
+    );
+
+    const pipelineTarget = toNumber(
+      getField(row, ["Valor", "Value", "Pipeline", "Meta pipeline"])
+    );
+
+    if (!targets.has(region)) {
+      targets.set(region, {
+        targetTickets: 0,
+        targetPipeline: 0,
+        hasSubtotal: false,
+      });
+    }
+
+    const target = targets.get(region)!;
+
+    if (role === "SDL") {
+      target.targetTickets = ticketsTarget;
+      target.targetPipeline = pipelineTarget;
+      target.hasSubtotal = true;
+      return;
+    }
+
+    if (!target.hasSubtotal) {
+      target.targetTickets += ticketsTarget;
+      target.targetPipeline += pipelineTarget;
+    }
+  });
+
+  return targets;
+}
+
 export type TicketDetail = {
   id: string;
   name: string;
@@ -393,6 +450,16 @@ export type ExecutivePerformance = {
     expired: TicketDetail[];
     discarded: TicketDetail[];
   };
+};
+
+export type RegionalCompliance = {
+  name: string;
+  actualTickets: number;
+  targetTickets: number;
+  ticketComplianceRate: number;
+  actualPipeline: number;
+  targetPipeline: number;
+  pipelineComplianceRate: number;
 };
 
 function buildTicketDetail(ticket: Record<string, string>): TicketDetail {
@@ -656,6 +723,70 @@ export function groupComplianceByManager(
       };
     })
     .sort((a, b) => b.complianceRate - a.complianceRate);
+}
+
+export function groupComplianceByRegion(
+  tickets: Record<string, string>[],
+  goalsConfig: Record<string, string>[]
+): RegionalCompliance[] {
+  const actuals = new Map<
+    string,
+    {
+      actualTickets: number;
+      actualPipeline: number;
+    }
+  >();
+
+  tickets.filter(shouldIncludeRow).forEach((ticket) => {
+    const region = getRegion(ticket);
+    if (!region || region === "Sin región" || region === "SNAP") return;
+
+    if (!actuals.has(region)) {
+      actuals.set(region, {
+        actualTickets: 0,
+        actualPipeline: 0,
+      });
+    }
+
+    const row = actuals.get(region)!;
+    row.actualTickets += 1;
+    row.actualPipeline += getPipelineAmount(ticket);
+  });
+
+  const targets = buildRegionalTargets(goalsConfig);
+
+  const names = Array.from(new Set([...actuals.keys(), ...targets.keys()]))
+    .filter((name) => name && name !== "No mapeado" && name !== "Sin región")
+    .sort();
+
+  return names.map((name) => {
+    const actual = actuals.get(name) || {
+      actualTickets: 0,
+      actualPipeline: 0,
+    };
+
+    const target = targets.get(name) || {
+      targetTickets: 0,
+      targetPipeline: 0,
+      hasSubtotal: false,
+    };
+
+    return {
+      name,
+      actualTickets: actual.actualTickets,
+      targetTickets: target.targetTickets,
+      ticketComplianceRate: getComplianceRate(
+        actual.actualTickets,
+        target.targetTickets
+      ),
+      actualPipeline: actual.actualPipeline,
+      targetPipeline: target.targetPipeline,
+      pipelineComplianceRate: getComplianceRate(
+        actual.actualPipeline,
+        target.targetPipeline
+      ),
+    };
+  });
 }
 
 export function groupComplianceByBusinessUnit(
