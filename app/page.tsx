@@ -56,7 +56,7 @@ export default async function HomePage() {
               </h1>
 
               <p className="mt-2 text-sm text-slate-400">
-                Fuente: Origen Métricas CPSM, TAM FINOPS, COM 2
+                Fuente de Datos: HubSpot CRM
               </p>
 
               <p className="text-sm text-slate-400">
