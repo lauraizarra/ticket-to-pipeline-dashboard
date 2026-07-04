@@ -43,6 +43,18 @@ function getComplianceStyle(rate: number) {
   };
 }
 
+function getEffectivenessStyle(rate: number) {
+  if (rate >= 40) {
+    return "border-emerald-500/25 bg-emerald-500/10 text-emerald-300";
+  }
+
+  if (rate >= 20) {
+    return "border-cyan-500/25 bg-cyan-500/10 text-cyan-300";
+  }
+
+  return "border-amber-500/25 bg-amber-500/10 text-amber-300";
+}
+
 function formatCompactCurrency(value: number) {
   const absValue = Math.abs(value);
 
@@ -103,24 +115,24 @@ export default async function HomePage() {
             </div>
 
             <div className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-4 py-2 text-sm text-emerald-300 shadow-[0_0_24px_rgba(52,211,153,0.12)]">
-              Vista ejecutiva · SLA y conversión comercial
+              Vista ejecutiva · gestión, efectividad y pipeline
             </div>
           </div>
         </div>
 
         <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <KpiCard
-            title="Tickets"
+            title="Tickets gestionados"
             value={formatNumber(metrics.totalTickets)}
             tone="emerald"
           />
           <KpiCard
-            title="Convertidos"
+            title="Tickets convertidos"
             value={formatNumber(metrics.converted)}
             tone="cyan"
           />
           <KpiCard
-            title="Conversión"
+            title="Efectividad comercial"
             value={`${metrics.conversionRate}%`}
             tone="blue"
           />
@@ -130,7 +142,7 @@ export default async function HomePage() {
             tone="violet"
           />
           <KpiCard
-            title="Pendientes"
+            title="En gestión"
             value={formatNumber(metrics.pending)}
             tone="slate"
           />
@@ -160,8 +172,8 @@ export default async function HomePage() {
                 </h2>
 
                 <p className="mt-1 max-w-3xl text-sm text-slate-400">
-                  Ranking por pipeline asociado, tickets gestionados y
-                  cumplimiento frente a meta semestral prorrateada.
+                  Ranking por pipeline asociado, tickets gestionados,
+                  cumplimiento de gestión y efectividad comercial.
                 </p>
               </div>
 
@@ -188,8 +200,8 @@ export default async function HomePage() {
 
         <section className="mt-8 grid gap-6 lg:grid-cols-2">
           <TargetComplianceCard
-            title="Cumplimiento por equipo gestor"
-            description="Avance por equipo comparando tickets gestionados y pipeline asociado frente a la meta prorrateada."
+            title="Cumplimiento de gestión por equipo"
+            description="Tickets gestionados frente a la meta prorrateada. La efectividad comercial se mide por conversión."
             rows={complianceByManager}
             breakdownTitle="Detalle de contribución individual"
             breakdownMode="contributors"
@@ -197,8 +209,8 @@ export default async function HomePage() {
           />
 
           <TargetComplianceCard
-            title="Cumplimiento regional"
-            description="Avance por región comparando tickets gestionados y pipeline asociado frente a la meta prorrateada."
+            title="Cumplimiento de gestión por región"
+            description="Tickets gestionados por región frente a la meta prorrateada, con pipeline y contribución comercial."
             rows={complianceByRegion}
             breakdownTitle="Contribución por unidad de negocio"
             breakdownMode="businessUnit"
@@ -277,16 +289,17 @@ function ExecutiveCard({ row }: { row: ExecutivePerformance }) {
           <span
             className={`inline-flex rounded-full border px-4 py-1.5 text-sm font-semibold ${style.pill}`}
           >
-            {row.complianceRate}%
+            Gestión {row.complianceRate}%
           </span>
 
           <p className="mt-1 text-xs text-slate-500">{style.label}</p>
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-3 gap-3 text-sm">
-        <MiniMetric label="Tickets" value={formatNumber(row.tickets)} />
+      <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+        <MiniMetric label="Gestionados" value={formatNumber(row.tickets)} />
         <MiniMetric label="Convertidos" value={formatNumber(row.converted)} />
+        <MiniMetric label="Efectividad" value={`${row.conversionRate}%`} />
         <MiniMetric
           label="Pipeline"
           value={formatCompactCurrency(row.pipeline)}
@@ -295,8 +308,8 @@ function ExecutiveCard({ row }: { row: ExecutivePerformance }) {
 
       <div className="mt-5">
         <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-          <span>Meta 6M: {formatNumber(row.target6M)}</span>
-          <span>Avance: {formatNumber(row.tickets)}</span>
+          <span>Meta individual 6M: {formatNumber(row.target6M)}</span>
+          <span>Gestión: {formatNumber(row.tickets)}</span>
         </div>
 
         <div className="h-2 overflow-hidden rounded-full bg-slate-800">
@@ -314,7 +327,7 @@ function ExecutiveCard({ row }: { row: ExecutivePerformance }) {
           </p>
 
           <p className="mt-1 text-xs text-slate-400">
-            Consulta los tickets convertidos, en espera, con alerta activa o
+            Consulta tickets convertidos, en gestión, con alerta activa o
             descartados.
           </p>
         </div>
@@ -328,7 +341,7 @@ function ExecutiveCard({ row }: { row: ExecutivePerformance }) {
           />
 
           <TicketBucketDetails
-            title="En espera"
+            title="En gestión"
             count={row.waiting}
             tickets={row.details.waiting}
             badgeClass="border-sky-500/20 bg-sky-500/10 text-sky-300"
@@ -546,6 +559,7 @@ function ExpandableComplianceCard({
   const pipelineStyle = getComplianceStyle(row.pipelineComplianceRate);
   const ticketProgress = Math.min(row.ticketComplianceRate, 100);
   const pipelineProgress = Math.min(row.pipelineComplianceRate, 100);
+  const effectivenessClass = getEffectivenessStyle(row.conversionRate);
 
   return (
     <details className="group rounded-2xl border border-slate-800 bg-slate-950 transition hover:border-cyan-400/25 hover:bg-slate-950/90">
@@ -554,7 +568,7 @@ function ExpandableComplianceCard({
           <div>
             <p className="font-medium text-white">{row.name}</p>
             <p className="mt-1 text-xs text-slate-400">
-              Tickets y pipeline asociado frente a meta prorrateada.
+              Cumplimiento de gestión, efectividad y pipeline asociado.
             </p>
           </div>
 
@@ -562,7 +576,7 @@ function ExpandableComplianceCard({
             <span
               className={`rounded-full border px-3 py-1 text-sm font-medium ${ticketStyle.pill}`}
             >
-              {row.ticketComplianceRate}%
+              Gestión {row.ticketComplianceRate}%
             </span>
 
             <span className="text-[11px] text-cyan-300 group-open:hidden">
@@ -575,40 +589,46 @@ function ExpandableComplianceCard({
           </div>
         </div>
 
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <SmallSummaryMetric
+            label="Gestionados"
+            value={`${formatNumber(row.actualTickets)} / ${formatNumber(
+              row.targetTickets
+            )}`}
+          />
+
+          <SmallSummaryMetric
+            label="Convertidos"
+            value={formatNumber(row.convertedTickets)}
+          />
+
+          <SmallSummaryMetric
+            label="Efectividad"
+            value={`${row.conversionRate}%`}
+            className={effectivenessClass}
+          />
+        </div>
+
         <div className="mt-4 space-y-4">
-          <div>
-            <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-              <span>
-                Tickets: {formatNumber(row.actualTickets)} /{" "}
-                {formatNumber(row.targetTickets)}
-              </span>
-              <span>{row.ticketComplianceRate}%</span>
-            </div>
+          <ProgressLine
+            label="Cumplimiento de gestión"
+            left={`Tickets: ${formatNumber(row.actualTickets)} / ${formatNumber(
+              row.targetTickets
+            )}`}
+            right={`${row.ticketComplianceRate}%`}
+            progress={ticketProgress}
+            barClass={ticketStyle.bar}
+          />
 
-            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-              <div
-                className={`h-full rounded-full ${ticketStyle.bar}`}
-                style={{ width: `${ticketProgress}%` }}
-              />
-            </div>
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-              <span>
-                Pipeline: {formatCompactCurrency(row.actualPipeline)} /{" "}
-                {formatCompactCurrency(row.targetPipeline)}
-              </span>
-              <span>{row.pipelineComplianceRate}%</span>
-            </div>
-
-            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-              <div
-                className={`h-full rounded-full ${pipelineStyle.bar}`}
-                style={{ width: `${pipelineProgress}%` }}
-              />
-            </div>
-          </div>
+          <ProgressLine
+            label="Pipeline asociado"
+            left={`${formatCompactCurrency(
+              row.actualPipeline
+            )} / ${formatCompactCurrency(row.targetPipeline)}`}
+            right={`${row.pipelineComplianceRate}%`}
+            progress={pipelineProgress}
+            barClass={pipelineStyle.bar}
+          />
         </div>
       </summary>
 
@@ -620,6 +640,61 @@ function ExpandableComplianceCard({
         />
       </div>
     </details>
+  );
+}
+
+function SmallSummaryMetric({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`rounded-2xl border border-slate-800 bg-slate-900/70 p-3 ${
+        className || ""
+      }`}
+    >
+      <p className="text-[11px] uppercase tracking-wide text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 truncate text-sm font-semibold text-white">{value}</p>
+    </div>
+  );
+}
+
+function ProgressLine({
+  label,
+  left,
+  right,
+  progress,
+  barClass,
+}: {
+  label: string;
+  left: string;
+  right: string;
+  progress: number;
+  barClass: string;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+        <span>
+          {label}: {left}
+        </span>
+        <span>{right}</span>
+      </div>
+
+      <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+        <div
+          className={`h-full rounded-full ${barClass}`}
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -684,8 +759,8 @@ function BreakdownRow({
 
   const secondary =
     mode === "contributors"
-      ? `${formatCompactCurrency(item.pipeline)} · ${item.shareRate}% del equipo`
-      : `${formatNumber(item.tickets)} tickets · ${item.shareRate}% del pipeline`;
+      ? `${item.convertedTickets} convertidos · ${item.conversionRate}% efectividad · ${item.shareRate}% del equipo`
+      : `${formatNumber(item.tickets)} tickets · ${item.convertedTickets} convertidos · ${item.shareRate}% del pipeline`;
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
