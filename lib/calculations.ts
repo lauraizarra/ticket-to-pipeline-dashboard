@@ -129,6 +129,10 @@ function getComplianceRate(actual: number, target: number): number {
   return target > 0 ? Math.round((actual / target) * 100) : 0;
 }
 
+function getShareRate(part: number, total: number): number {
+  return total > 0 ? Math.round((part / total) * 100) : 0;
+}
+
 function normalizeTeam(value: string) {
   const text = normalizeText(value);
 
@@ -151,10 +155,31 @@ function normalizeRegionName(region: string) {
   return region || "Sin región";
 }
 
-function shouldIncludeRow(row: Record<string, string>) {
-  const region = normalizeRegionName(
+function getRegion(row: Record<string, string>) {
+  return normalizeRegionName(
     getField(row, ["Región Mapeada", "Región", "Region"])
   );
+}
+
+function getTeam(row: Record<string, string>) {
+  return getField(row, ["Equipo", "Gestionado por", "Team"]) || "Sin equipo";
+}
+
+function getBusinessUnit(row: Record<string, string>) {
+  return (
+    getField(row, [
+      "Unidad de Negocio Mapeada",
+      "Unidad de Negocio",
+      "Unidad de negocio",
+      "Business Unit",
+      "BU",
+      "Unidad",
+    ]) || "No mapeado"
+  );
+}
+
+function shouldIncludeRow(row: Record<string, string>) {
+  const region = getRegion(row);
 
   const included = getField(row, [
     "En meta",
@@ -188,37 +213,13 @@ function getExecutiveName(row: Record<string, string>) {
   );
 }
 
-function getBusinessUnit(row: Record<string, string>) {
-  return (
-    getField(row, [
-      "Unidad de Negocio Mapeada",
-      "Unidad de Negocio",
-      "Unidad de negocio",
-      "Business Unit",
-      "BU",
-      "Unidad",
-    ]) || "No mapeado"
-  );
-}
-
-function getRegion(row: Record<string, string>) {
-  return normalizeRegionName(
-    getField(row, ["Región Mapeada", "Región", "Region"])
-  );
-}
-
-function getTeam(row: Record<string, string>) {
-  return getField(row, ["Equipo", "Gestionado por", "Team"]) || "Sin equipo";
-}
-
 function getExecutiveTarget(
   executive: string,
   teamMapping: Record<string, string>[] = [],
-  goalsConfig: Record<string, string>[] = [],
   dashboardRows: Record<string, string>[] = []
 ) {
   const normalizedExecutive = normalizeText(executive);
-  const sourceRows = [...teamMapping, ...goalsConfig, ...dashboardRows];
+  const sourceRows = [...teamMapping, ...dashboardRows];
 
   const matchingRows = sourceRows.filter((row) => {
     const rowExecutive = normalizeText(
@@ -376,7 +377,7 @@ function getTicketBucket(ticket: Record<string, string>) {
 function getGoalRows(goalsConfig: Record<string, string>[]) {
   return goalsConfig.filter((row) => {
     const type = normalizeText(getField(row, ["Tipo", "Type"]));
-    return !type || type === "REGION";
+    return type === "REGION" || type === "";
   });
 }
 
@@ -398,7 +399,13 @@ function buildGoalTargets(
         ? normalizeRegionName(getField(row, ["Región", "Region"]))
         : normalizeTeam(getField(row, ["Equipo", "Team", "Rol", "Role"]));
 
-    if (!key || key === "SNAP" || key === "Sin región" || key === "Sin equipo") {
+    if (
+      !key ||
+      key === "SNAP" ||
+      key === "Sin región" ||
+      key === "Sin equipo" ||
+      key === "No mapeado"
+    ) {
       return;
     }
 
@@ -476,6 +483,13 @@ export type ExecutivePerformance = {
   };
 };
 
+export type TargetBreakdown = {
+  name: string;
+  tickets: number;
+  pipeline: number;
+  shareRate: number;
+};
+
 export type TargetCompliance = {
   name: string;
   actualTickets: number;
@@ -484,6 +498,7 @@ export type TargetCompliance = {
   actualPipeline: number;
   targetPipeline: number;
   pipelineComplianceRate: number;
+  breakdown: TargetBreakdown[];
 };
 
 function buildTicketDetail(ticket: Record<string, string>): TicketDetail {
@@ -631,12 +646,7 @@ export function groupByExecutive(
         expiring: 0,
         discarded: 0,
         pipeline: 0,
-        target6M: getExecutiveTarget(
-          executive,
-          teamMapping,
-          goalsConfig,
-          dashboardRows
-        ),
+        target6M: getExecutiveTarget(executive, teamMapping, dashboardRows),
         conversionRate: 0,
         complianceRate: 0,
         details: {
@@ -694,41 +704,78 @@ export function groupComplianceByManager(
     {
       actualTickets: number;
       actualPipeline: number;
+      contributors: Map<
+        string,
+        {
+          tickets: number;
+          pipeline: number;
+        }
+      >;
     }
   >();
 
   tickets.filter(shouldIncludeRow).forEach((ticket) => {
     const team = normalizeTeam(getTeam(ticket));
+    const executive = getExecutiveName(ticket);
+
     if (!team || team === "No mapeado" || team === "Sin equipo") return;
 
     if (!actuals.has(team)) {
       actuals.set(team, {
         actualTickets: 0,
         actualPipeline: 0,
+        contributors: new Map(),
       });
     }
 
-    const row = actuals.get(team)!;
-    row.actualTickets += 1;
-    row.actualPipeline += getPipelineAmount(ticket);
+    const teamRow = actuals.get(team)!;
+    const pipeline = getPipelineAmount(ticket);
+
+    teamRow.actualTickets += 1;
+    teamRow.actualPipeline += pipeline;
+
+    if (!teamRow.contributors.has(executive)) {
+      teamRow.contributors.set(executive, {
+        tickets: 0,
+        pipeline: 0,
+      });
+    }
+
+    const contributor = teamRow.contributors.get(executive)!;
+    contributor.tickets += 1;
+    contributor.pipeline += pipeline;
   });
 
   const targets = buildGoalTargets(goalsConfig, "team");
   const preferredOrder = ["TAM - FINOPS", "CPSM", "COM"];
 
-  const names = Array.from(new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()]))
-    .filter((name) => targets.has(name) || actuals.has(name));
+  const names = Array.from(
+    new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()])
+  ).filter((name) => targets.has(name) || actuals.has(name));
 
   return names.map((name) => {
     const actual = actuals.get(name) || {
       actualTickets: 0,
       actualPipeline: 0,
+      contributors: new Map(),
     };
 
     const target = targets.get(name) || {
       targetTickets: 0,
       targetPipeline: 0,
     };
+
+    const breakdown = Array.from(actual.contributors.entries())
+      .map(([contributorName, contributor]) => ({
+        name: contributorName,
+        tickets: contributor.tickets,
+        pipeline: contributor.pipeline,
+        shareRate: getShareRate(contributor.tickets, actual.actualTickets),
+      }))
+      .sort((a, b) => {
+        if (b.tickets !== a.tickets) return b.tickets - a.tickets;
+        return b.pipeline - a.pipeline;
+      });
 
     return {
       name,
@@ -744,6 +791,7 @@ export function groupComplianceByManager(
         actual.actualPipeline,
         target.targetPipeline
       ),
+      breakdown,
     };
   });
 }
@@ -757,41 +805,78 @@ export function groupComplianceByRegion(
     {
       actualTickets: number;
       actualPipeline: number;
+      businessUnits: Map<
+        string,
+        {
+          tickets: number;
+          pipeline: number;
+        }
+      >;
     }
   >();
 
   tickets.filter(shouldIncludeRow).forEach((ticket) => {
     const region = getRegion(ticket);
+    const businessUnit = getBusinessUnit(ticket);
+
     if (!region || region === "Sin región" || region === "SNAP") return;
 
     if (!actuals.has(region)) {
       actuals.set(region, {
         actualTickets: 0,
         actualPipeline: 0,
+        businessUnits: new Map(),
       });
     }
 
-    const row = actuals.get(region)!;
-    row.actualTickets += 1;
-    row.actualPipeline += getPipelineAmount(ticket);
+    const regionRow = actuals.get(region)!;
+    const pipeline = getPipelineAmount(ticket);
+
+    regionRow.actualTickets += 1;
+    regionRow.actualPipeline += pipeline;
+
+    if (!regionRow.businessUnits.has(businessUnit)) {
+      regionRow.businessUnits.set(businessUnit, {
+        tickets: 0,
+        pipeline: 0,
+      });
+    }
+
+    const unit = regionRow.businessUnits.get(businessUnit)!;
+    unit.tickets += 1;
+    unit.pipeline += pipeline;
   });
 
   const targets = buildGoalTargets(goalsConfig, "region");
   const preferredOrder = ["SOLA", "NOLA", "CARIBE", "MX"];
 
-  const names = Array.from(new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()]))
-    .filter((name) => targets.has(name) || actuals.has(name));
+  const names = Array.from(
+    new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()])
+  ).filter((name) => targets.has(name) || actuals.has(name));
 
   return names.map((name) => {
     const actual = actuals.get(name) || {
       actualTickets: 0,
       actualPipeline: 0,
+      businessUnits: new Map(),
     };
 
     const target = targets.get(name) || {
       targetTickets: 0,
       targetPipeline: 0,
     };
+
+    const breakdown = Array.from(actual.businessUnits.entries())
+      .map(([unitName, unit]) => ({
+        name: unitName,
+        tickets: unit.tickets,
+        pipeline: unit.pipeline,
+        shareRate: getShareRate(unit.pipeline, actual.actualPipeline),
+      }))
+      .sort((a, b) => {
+        if (b.pipeline !== a.pipeline) return b.pipeline - a.pipeline;
+        return b.tickets - a.tickets;
+      });
 
     return {
       name,
@@ -807,6 +892,7 @@ export function groupComplianceByRegion(
         actual.actualPipeline,
         target.targetPipeline
       ),
+      breakdown,
     };
   });
 }

@@ -5,6 +5,7 @@ import {
   groupComplianceByManager,
   groupComplianceByRegion,
   type ExecutivePerformance,
+  type TargetBreakdown,
   type TargetCompliance,
   type TicketDetail,
 } from "@/lib/calculations";
@@ -190,12 +191,18 @@ export default async function HomePage() {
             title="Cumplimiento por equipo gestor"
             description="Avance por equipo comparando tickets gestionados y pipeline asociado frente a la meta prorrateada."
             rows={complianceByManager}
+            breakdownTitle="Detalle de contribución individual"
+            breakdownMode="contributors"
+            clickHint="Haz clic en una tarjeta para ver el detalle individual."
           />
 
           <TargetComplianceCard
             title="Cumplimiento regional"
             description="Avance por región comparando tickets gestionados y pipeline asociado frente a la meta prorrateada."
             rows={complianceByRegion}
+            breakdownTitle="Contribución por unidad de negocio"
+            breakdownMode="businessUnit"
+            clickHint="Haz clic en una región para ver la contribución por unidad de negocio."
           />
         </section>
       </section>
@@ -485,83 +492,34 @@ function TargetComplianceCard({
   title,
   description,
   rows,
+  breakdownTitle,
+  breakdownMode,
+  clickHint,
 }: {
   title: string;
   description: string;
   rows: TargetCompliance[];
+  breakdownTitle: string;
+  breakdownMode: "contributors" | "businessUnit";
+  clickHint: string;
 }) {
   return (
     <div className="rounded-3xl border border-cyan-400/15 bg-slate-900/80 p-5 shadow-[0_0_32px_rgba(34,211,238,0.06)]">
       <div className="mb-4">
         <h2 className="text-lg font-semibold">{title}</h2>
         <p className="mt-1 text-sm text-slate-400">{description}</p>
+        <p className="mt-2 text-xs text-cyan-300">{clickHint}</p>
       </div>
 
       <div className="space-y-4">
-        {rows.map((row) => {
-          const ticketStyle = getComplianceStyle(row.ticketComplianceRate);
-          const pipelineStyle = getComplianceStyle(row.pipelineComplianceRate);
-          const ticketProgress = Math.min(row.ticketComplianceRate, 100);
-          const pipelineProgress = Math.min(row.pipelineComplianceRate, 100);
-
-          return (
-            <div
-              key={row.name}
-              className="rounded-2xl border border-slate-800 bg-slate-950 p-4"
-            >
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <p className="font-medium text-white">{row.name}</p>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Tickets y pipeline asociado frente a meta prorrateada.
-                  </p>
-                </div>
-
-                <span
-                  className={`rounded-full border px-3 py-1 text-sm font-medium ${ticketStyle.pill}`}
-                >
-                  {row.ticketComplianceRate}%
-                </span>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-                    <span>
-                      Tickets: {formatNumber(row.actualTickets)} /{" "}
-                      {formatNumber(row.targetTickets)}
-                    </span>
-                    <span>{row.ticketComplianceRate}%</span>
-                  </div>
-
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className={`h-full rounded-full ${ticketStyle.bar}`}
-                      style={{ width: `${ticketProgress}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-                    <span>
-                      Pipeline: {formatCompactCurrency(row.actualPipeline)} /{" "}
-                      {formatCompactCurrency(row.targetPipeline)}
-                    </span>
-                    <span>{row.pipelineComplianceRate}%</span>
-                  </div>
-
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className={`h-full rounded-full ${pipelineStyle.bar}`}
-                      style={{ width: `${pipelineProgress}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        {rows.map((row) => (
+          <ExpandableComplianceCard
+            key={row.name}
+            row={row}
+            breakdownTitle={breakdownTitle}
+            breakdownMode={breakdownMode}
+          />
+        ))}
 
         {rows.length === 0 && (
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center">
@@ -570,6 +528,183 @@ function TargetComplianceCard({
             </p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ExpandableComplianceCard({
+  row,
+  breakdownTitle,
+  breakdownMode,
+}: {
+  row: TargetCompliance;
+  breakdownTitle: string;
+  breakdownMode: "contributors" | "businessUnit";
+}) {
+  const ticketStyle = getComplianceStyle(row.ticketComplianceRate);
+  const pipelineStyle = getComplianceStyle(row.pipelineComplianceRate);
+  const ticketProgress = Math.min(row.ticketComplianceRate, 100);
+  const pipelineProgress = Math.min(row.pipelineComplianceRate, 100);
+
+  return (
+    <details className="group rounded-2xl border border-slate-800 bg-slate-950 transition hover:border-cyan-400/25 hover:bg-slate-950/90">
+      <summary className="cursor-pointer list-none p-4 outline-none focus:outline-none">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="font-medium text-white">{row.name}</p>
+            <p className="mt-1 text-xs text-slate-400">
+              Tickets y pipeline asociado frente a meta prorrateada.
+            </p>
+          </div>
+
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <span
+              className={`rounded-full border px-3 py-1 text-sm font-medium ${ticketStyle.pill}`}
+            >
+              {row.ticketComplianceRate}%
+            </span>
+
+            <span className="text-[11px] text-cyan-300 group-open:hidden">
+              Ver detalle
+            </span>
+
+            <span className="hidden text-[11px] text-cyan-300 group-open:inline">
+              Ocultar detalle
+            </span>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <div>
+            <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+              <span>
+                Tickets: {formatNumber(row.actualTickets)} /{" "}
+                {formatNumber(row.targetTickets)}
+              </span>
+              <span>{row.ticketComplianceRate}%</span>
+            </div>
+
+            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+              <div
+                className={`h-full rounded-full ${ticketStyle.bar}`}
+                style={{ width: `${ticketProgress}%` }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+              <span>
+                Pipeline: {formatCompactCurrency(row.actualPipeline)} /{" "}
+                {formatCompactCurrency(row.targetPipeline)}
+              </span>
+              <span>{row.pipelineComplianceRate}%</span>
+            </div>
+
+            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+              <div
+                className={`h-full rounded-full ${pipelineStyle.bar}`}
+                style={{ width: `${pipelineProgress}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </summary>
+
+      <div className="px-4 pb-4">
+        <BreakdownSubCard
+          title={breakdownTitle}
+          mode={breakdownMode}
+          items={row.breakdown}
+        />
+      </div>
+    </details>
+  );
+}
+
+function BreakdownSubCard({
+  title,
+  mode,
+  items,
+}: {
+  title: string;
+  mode: "contributors" | "businessUnit";
+  items: TargetBreakdown[];
+}) {
+  const emptyText =
+    mode === "contributors"
+      ? "Sin integrantes con tickets registrados."
+      : "Sin unidades de negocio con pipeline registrado.";
+
+  return (
+    <div className="rounded-2xl border border-cyan-400/10 bg-slate-900/80 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          {title}
+        </p>
+
+        <span className="rounded-full border border-cyan-400/15 bg-cyan-400/10 px-2 py-0.5 text-[11px] text-cyan-200">
+          Top {Math.min(items.length, 5)}
+        </span>
+      </div>
+
+      <div className="space-y-2">
+        {items.slice(0, 5).map((item) => (
+          <BreakdownRow key={item.name} item={item} mode={mode} />
+        ))}
+
+        {items.length === 0 && (
+          <p className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-400">
+            {emptyText}
+          </p>
+        )}
+
+        {items.length > 5 && (
+          <p className="text-[11px] text-slate-500">
+            Se muestran 5 de {formatNumber(items.length)} registros.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BreakdownRow({
+  item,
+  mode,
+}: {
+  item: TargetBreakdown;
+  mode: "contributors" | "businessUnit";
+}) {
+  const label =
+    mode === "contributors"
+      ? `${formatNumber(item.tickets)} tickets`
+      : formatCompactCurrency(item.pipeline);
+
+  const secondary =
+    mode === "contributors"
+      ? `${formatCompactCurrency(item.pipeline)} · ${item.shareRate}% del equipo`
+      : `${formatNumber(item.tickets)} tickets · ${item.shareRate}% del pipeline`;
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-white">{item.name}</p>
+          <p className="mt-1 text-xs text-slate-400">{secondary}</p>
+        </div>
+
+        <span className="shrink-0 rounded-full border border-emerald-400/15 bg-emerald-400/10 px-2.5 py-1 text-xs text-emerald-300">
+          {label}
+        </span>
+      </div>
+
+      <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+        <div
+          className="h-full rounded-full bg-cyan-300"
+          style={{ width: `${Math.min(item.shareRate, 100)}%` }}
+        />
       </div>
     </div>
   );
