@@ -5,7 +5,7 @@ import {
   groupComplianceByManager,
   groupComplianceByRegion,
   type ExecutivePerformance,
-  type RegionalCompliance,
+  type TargetCompliance,
   type TicketDetail,
 } from "@/lib/calculations";
 import { formatCurrency, formatNumber } from "@/lib/formatters";
@@ -74,7 +74,7 @@ export default async function HomePage() {
     dashboardRows
   ).slice(0, 12);
 
-  const complianceByManager = groupComplianceByManager(tickets, teamMapping);
+  const complianceByManager = groupComplianceByManager(tickets, goalsConfig);
   const complianceByRegion = groupComplianceByRegion(tickets, goalsConfig);
 
   return (
@@ -186,15 +186,15 @@ export default async function HomePage() {
         </section>
 
         <section className="mt-8 grid gap-6 lg:grid-cols-2">
-          <ComplianceCard
+          <TargetComplianceCard
             title="Cumplimiento por equipo gestor"
-            description="Tickets gestionados frente a la meta esperada a la fecha."
+            description="Avance por equipo comparando tickets gestionados y pipeline asociado frente a la meta prorrateada."
             rows={complianceByManager}
           />
 
-          <RegionalComplianceCard
+          <TargetComplianceCard
             title="Cumplimiento regional"
-            description="Avance por región comparando tickets gestionados y pipeline asociado frente a la meta regional."
+            description="Avance por región comparando tickets gestionados y pipeline asociado frente a la meta prorrateada."
             rows={complianceByRegion}
           />
         </section>
@@ -481,84 +481,14 @@ function TicketDetailItem({ ticket }: { ticket: TicketDetail }) {
   );
 }
 
-function ComplianceCard({
+function TargetComplianceCard({
   title,
   description,
   rows,
 }: {
   title: string;
   description: string;
-  rows: Array<{
-    name: string;
-    actual: number;
-    target: number;
-    complianceRate: number;
-  }>;
-}) {
-  return (
-    <div className="rounded-3xl border border-cyan-400/15 bg-slate-900/80 p-5 shadow-[0_0_32px_rgba(34,211,238,0.06)]">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="mt-1 text-sm text-slate-400">{description}</p>
-      </div>
-
-      <div className="space-y-4">
-        {rows.map((row) => {
-          const progress = Math.min(row.complianceRate, 100);
-          const style = getComplianceStyle(row.complianceRate);
-
-          return (
-            <div
-              key={row.name}
-              className="rounded-2xl border border-slate-800 bg-slate-950 p-4"
-            >
-              <div className="mb-3 flex items-start justify-between gap-4">
-                <div>
-                  <p className="font-medium text-white">{row.name}</p>
-
-                  <p className="mt-1 text-xs text-slate-400">
-                    {formatNumber(row.actual)} tickets / meta{" "}
-                    {formatNumber(row.target)}
-                  </p>
-                </div>
-
-                <span
-                  className={`rounded-full border px-3 py-1 text-sm font-medium ${style.pill}`}
-                >
-                  {row.complianceRate}%
-                </span>
-              </div>
-
-              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                <div
-                  className={`h-full rounded-full ${style.bar}`}
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-            </div>
-          );
-        })}
-
-        {rows.length === 0 && (
-          <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center">
-            <p className="text-sm text-slate-400">
-              Sin datos disponibles para calcular cumplimiento.
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RegionalComplianceCard({
-  title,
-  description,
-  rows,
-}: {
-  title: string;
-  description: string;
-  rows: RegionalCompliance[];
+  rows: TargetCompliance[];
 }) {
   return (
     <div className="rounded-3xl border border-cyan-400/15 bg-slate-900/80 p-5 shadow-[0_0_32px_rgba(34,211,238,0.06)]">
@@ -583,7 +513,7 @@ function RegionalComplianceCard({
                 <div>
                   <p className="font-medium text-white">{row.name}</p>
                   <p className="mt-1 text-xs text-slate-400">
-                    Tickets y pipeline asociado frente a meta regional.
+                    Tickets y pipeline asociado frente a meta prorrateada.
                   </p>
                 </div>
 
@@ -636,7 +566,7 @@ function RegionalComplianceCard({
         {rows.length === 0 && (
           <div className="rounded-xl border border-slate-800 bg-slate-950 p-6 text-center">
             <p className="text-sm text-slate-400">
-              Sin datos disponibles para calcular cumplimiento regional.
+              Sin datos disponibles para calcular cumplimiento.
             </p>
           </div>
         )}

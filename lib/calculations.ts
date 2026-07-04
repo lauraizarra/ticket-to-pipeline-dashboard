@@ -69,7 +69,6 @@ function isTrue(value: unknown): boolean {
 
 function getField(row: Record<string, string>, possibleNames: string[]) {
   const entries = Object.entries(row).map(([key, value]) => ({
-    key,
     normalizedKey: normalizeText(key),
     compactKey: normalizeText(key).replace(/[^A-Z0-9]/g, ""),
     value,
@@ -140,8 +139,22 @@ function normalizeTeam(value: string) {
   return value || "No mapeado";
 }
 
+function normalizeRegionName(region: string) {
+  const normalized = normalizeText(region);
+
+  if (normalized.includes("MEX") || normalized === "MX") return "MX";
+  if (normalized.includes("CARIBE")) return "CARIBE";
+  if (normalized.includes("NOLA")) return "NOLA";
+  if (normalized.includes("SOLA")) return "SOLA";
+  if (normalized.includes("SNAP")) return "SNAP";
+
+  return region || "Sin región";
+}
+
 function shouldIncludeRow(row: Record<string, string>) {
-  const region = getField(row, ["Región Mapeada", "Región", "Region"]);
+  const region = normalizeRegionName(
+    getField(row, ["Región Mapeada", "Región", "Region"])
+  );
 
   const included = getField(row, [
     "En meta",
@@ -189,7 +202,9 @@ function getBusinessUnit(row: Record<string, string>) {
 }
 
 function getRegion(row: Record<string, string>) {
-  return getField(row, ["Región Mapeada", "Región", "Region"]) || "Sin región";
+  return normalizeRegionName(
+    getField(row, ["Región Mapeada", "Región", "Region"])
+  );
 }
 
 function getTeam(row: Record<string, string>) {
@@ -228,7 +243,9 @@ function getExecutiveTarget(
 
     const active = getField(row, ["Activo", "active"]);
     const included = getField(row, ["Incluido en meta", "En meta", "Included"]);
-    const region = getField(row, ["Región", "Region", "Región Mapeada"]);
+    const region = normalizeRegionName(
+      getField(row, ["Región", "Region", "Región Mapeada"])
+    );
 
     return (
       rowExecutive === normalizedExecutive &&
@@ -356,58 +373,65 @@ function getTicketBucket(ticket: Record<string, string>) {
   return "waiting";
 }
 
-function buildRegionalTargets(goalsConfig: Record<string, string>[]) {
+function getGoalRows(goalsConfig: Record<string, string>[]) {
+  return goalsConfig.filter((row) => {
+    const type = normalizeText(getField(row, ["Tipo", "Type"]));
+    return !type || type === "REGION";
+  });
+}
+
+function buildGoalTargets(
+  goalsConfig: Record<string, string>[],
+  dimension: "region" | "team"
+) {
   const targets = new Map<
     string,
     {
       targetTickets: number;
       targetPipeline: number;
-      hasSubtotal: boolean;
     }
   >();
 
-  let currentRegion = "";
+  getGoalRows(goalsConfig).forEach((row) => {
+    const key =
+      dimension === "region"
+        ? normalizeRegionName(getField(row, ["Región", "Region"]))
+        : normalizeTeam(getField(row, ["Equipo", "Team", "Rol", "Role"]));
 
-  goalsConfig.forEach((row) => {
-    const explicitRegion = getField(row, ["Región", "Region"]);
-    if (explicitRegion) currentRegion = explicitRegion;
-
-    const region = currentRegion;
-    if (!region) return;
-
-    const role = normalizeText(getField(row, ["Rol", "Role", "Equipo"]));
-
-    if (role.includes("GRAN TOTAL")) return;
-
-    const ticketsTarget = toNumber(
-      getField(row, ["Cantidad", "Tickets", "Meta tickets", "Ticket Target"])
-    );
-
-    const pipelineTarget = toNumber(
-      getField(row, ["Valor", "Value", "Pipeline", "Meta pipeline"])
-    );
-
-    if (!targets.has(region)) {
-      targets.set(region, {
-        targetTickets: 0,
-        targetPipeline: 0,
-        hasSubtotal: false,
-      });
-    }
-
-    const target = targets.get(region)!;
-
-    if (role === "SDL") {
-      target.targetTickets = ticketsTarget;
-      target.targetPipeline = pipelineTarget;
-      target.hasSubtotal = true;
+    if (!key || key === "SNAP" || key === "Sin región" || key === "Sin equipo") {
       return;
     }
 
-    if (!target.hasSubtotal) {
-      target.targetTickets += ticketsTarget;
-      target.targetPipeline += pipelineTarget;
+    const targetTickets = toNumber(
+      getField(row, [
+        "Meta prorrateada tickets",
+        "Meta prorrateada HC tickets",
+        "Meta restante",
+        "Target tickets",
+        "Tickets target",
+      ])
+    );
+
+    const targetPipeline = toNumber(
+      getField(row, [
+        "Valor prorrateado pipeline",
+        "Pipeline prorrateado",
+        "Meta pipeline prorrateada",
+        "Valor restante",
+        "Pipeline target",
+      ])
+    );
+
+    if (!targets.has(key)) {
+      targets.set(key, {
+        targetTickets: 0,
+        targetPipeline: 0,
+      });
     }
+
+    const target = targets.get(key)!;
+    target.targetTickets += targetTickets;
+    target.targetPipeline += targetPipeline;
   });
 
   return targets;
@@ -452,7 +476,7 @@ export type ExecutivePerformance = {
   };
 };
 
-export type RegionalCompliance = {
+export type TargetCompliance = {
   name: string;
   actualTickets: number;
   targetTickets: number;
@@ -663,72 +687,71 @@ export function groupByExecutive(
 
 export function groupComplianceByManager(
   tickets: Record<string, string>[],
-  teamMapping: Record<string, string>[]
-) {
-  const actuals = new Map<string, number>();
-  const targets = new Map<string, number>();
+  goalsConfig: Record<string, string>[]
+): TargetCompliance[] {
+  const actuals = new Map<
+    string,
+    {
+      actualTickets: number;
+      actualPipeline: number;
+    }
+  >();
 
   tickets.filter(shouldIncludeRow).forEach((ticket) => {
     const team = normalizeTeam(getTeam(ticket));
-    actuals.set(team, (actuals.get(team) || 0) + 1);
+    if (!team || team === "No mapeado" || team === "Sin equipo") return;
+
+    if (!actuals.has(team)) {
+      actuals.set(team, {
+        actualTickets: 0,
+        actualPipeline: 0,
+      });
+    }
+
+    const row = actuals.get(team)!;
+    row.actualTickets += 1;
+    row.actualPipeline += getPipelineAmount(ticket);
   });
 
-  teamMapping
-    .filter((row) => {
-      const active = getField(row, ["Activo", "active"]);
-      const included = getField(row, ["Incluido en meta", "En meta"]);
-      const region = getField(row, ["Región", "Region", "Región Mapeada"]);
+  const targets = buildGoalTargets(goalsConfig, "team");
+  const preferredOrder = ["TAM - FINOPS", "CPSM", "COM"];
 
-      return (
-        region !== "SNAP" &&
-        isTrue(active || "TRUE") &&
-        isTrue(included || "TRUE")
-      );
-    })
-    .forEach((row) => {
-      const team = normalizeTeam(getTeam(row));
+  const names = Array.from(new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()]))
+    .filter((name) => targets.has(name) || actuals.has(name));
 
-      const target = toNumber(
-        getField(row, [
-          "Meta esperada a la fecha",
-          "Meta Esperada a la Fecha",
-          "Meta esperada",
-          "Meta a la fecha",
-          "Meta 6M",
-          "Meta 6 meses",
-          "Meta semestral",
-          "Target 6M",
-          "Target",
-          "Meta",
-        ])
-      );
+  return names.map((name) => {
+    const actual = actuals.get(name) || {
+      actualTickets: 0,
+      actualPipeline: 0,
+    };
 
-      targets.set(team, (targets.get(team) || 0) + target);
-    });
+    const target = targets.get(name) || {
+      targetTickets: 0,
+      targetPipeline: 0,
+    };
 
-  const names = Array.from(
-    new Set([...actuals.keys(), ...targets.keys()])
-  ).filter((name) => name && name !== "No mapeado");
-
-  return names
-    .map((name) => {
-      const actual = actuals.get(name) || 0;
-      const target = targets.get(name) || 0;
-
-      return {
-        name,
-        actual,
-        target,
-        complianceRate: getComplianceRate(actual, target),
-      };
-    })
-    .sort((a, b) => b.complianceRate - a.complianceRate);
+    return {
+      name,
+      actualTickets: actual.actualTickets,
+      targetTickets: target.targetTickets,
+      ticketComplianceRate: getComplianceRate(
+        actual.actualTickets,
+        target.targetTickets
+      ),
+      actualPipeline: actual.actualPipeline,
+      targetPipeline: target.targetPipeline,
+      pipelineComplianceRate: getComplianceRate(
+        actual.actualPipeline,
+        target.targetPipeline
+      ),
+    };
+  });
 }
 
 export function groupComplianceByRegion(
   tickets: Record<string, string>[],
   goalsConfig: Record<string, string>[]
-): RegionalCompliance[] {
+): TargetCompliance[] {
   const actuals = new Map<
     string,
     {
@@ -753,11 +776,11 @@ export function groupComplianceByRegion(
     row.actualPipeline += getPipelineAmount(ticket);
   });
 
-  const targets = buildRegionalTargets(goalsConfig);
+  const targets = buildGoalTargets(goalsConfig, "region");
+  const preferredOrder = ["SOLA", "NOLA", "CARIBE", "MX"];
 
-  const names = Array.from(new Set([...actuals.keys(), ...targets.keys()]))
-    .filter((name) => name && name !== "No mapeado" && name !== "Sin región")
-    .sort();
+  const names = Array.from(new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()]))
+    .filter((name) => targets.has(name) || actuals.has(name));
 
   return names.map((name) => {
     const actual = actuals.get(name) || {
@@ -768,7 +791,6 @@ export function groupComplianceByRegion(
     const target = targets.get(name) || {
       targetTickets: 0,
       targetPipeline: 0,
-      hasSubtotal: false,
     };
 
     return {
@@ -787,70 +809,4 @@ export function groupComplianceByRegion(
       ),
     };
   });
-}
-
-export function groupComplianceByBusinessUnit(
-  tickets: Record<string, string>[],
-  teamMapping: Record<string, string>[]
-) {
-  const actuals = new Map<string, number>();
-  const targets = new Map<string, number>();
-
-  tickets.filter(shouldIncludeRow).forEach((ticket) => {
-    const businessUnit = getBusinessUnit(ticket);
-    actuals.set(businessUnit, (actuals.get(businessUnit) || 0) + 1);
-  });
-
-  teamMapping
-    .filter((row) => {
-      const active = getField(row, ["Activo", "active"]);
-      const included = getField(row, ["Incluido en meta", "En meta"]);
-      const region = getField(row, ["Región", "Region", "Región Mapeada"]);
-
-      return (
-        region !== "SNAP" &&
-        isTrue(active || "TRUE") &&
-        isTrue(included || "TRUE")
-      );
-    })
-    .forEach((row) => {
-      const businessUnit = getBusinessUnit(row);
-
-      const target = toNumber(
-        getField(row, [
-          "Meta esperada a la fecha",
-          "Meta Esperada a la Fecha",
-          "Meta esperada",
-          "Meta a la fecha",
-          "Meta 6M",
-          "Meta 6 meses",
-          "Meta semestral",
-          "Target 6M",
-          "Target",
-          "Meta",
-        ])
-      );
-
-      if (businessUnit) {
-        targets.set(businessUnit, (targets.get(businessUnit) || 0) + target);
-      }
-    });
-
-  const names = Array.from(
-    new Set([...actuals.keys(), ...targets.keys()])
-  ).filter((name) => name && name !== "No mapeado");
-
-  return names
-    .map((name) => {
-      const actual = actuals.get(name) || 0;
-      const target = targets.get(name) || 0;
-
-      return {
-        name,
-        actual,
-        target,
-        complianceRate: getComplianceRate(actual, target),
-      };
-    })
-    .sort((a, b) => b.complianceRate - a.complianceRate);
 }
