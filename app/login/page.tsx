@@ -136,14 +136,21 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 16,
   },
   ghostButton: {
+    width: 40,
+    height: 40,
     border: 0,
     borderRadius: 12,
-    background: "transparent",
+    background: "rgba(100,116,139,0.10)",
     color: muted,
-    fontSize: 12,
-    fontWeight: 800,
+    display: "grid",
+    placeItems: "center",
     cursor: "pointer",
-    padding: "10px 12px",
+    padding: 0,
+  },
+  eyeIcon: {
+    width: 22,
+    height: 22,
+    display: "block",
   },
   submit: {
     marginTop: 4,
@@ -267,9 +274,40 @@ export default function LoginPage() {
               type="button"
               onClick={() => setShowPassword((current) => !current)}
               aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+              title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
               style={styles.ghostButton}
             >
-              {showPassword ? "Ocultar" : "Ver"}
+              {showPassword ? (
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={styles.eyeIcon}
+                >
+                  <path d="M3 3l18 18" />
+                  <path d="M10.58 10.58A2 2 0 0 0 13.42 13.42" />
+                  <path d="M9.88 5.09A9.77 9.77 0 0 1 12 4.86c5.25 0 8.75 5.14 9.62 6.54a1.1 1.1 0 0 1 0 1.2 16.7 16.7 0 0 1-2.25 2.82" />
+                  <path d="M6.11 6.11A16.2 16.2 0 0 0 2.38 11.4a1.1 1.1 0 0 0 0 1.2C3.25 14 6.75 19.14 12 19.14a9.68 9.68 0 0 0 4.09-.91" />
+                </svg>
+              ) : (
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={styles.eyeIcon}
+                >
+                  <path d="M2.38 11.4C3.25 10 6.75 4.86 12 4.86S20.75 10 21.62 11.4a1.1 1.1 0 0 1 0 1.2C20.75 14 17.25 19.14 12 19.14S3.25 14 2.38 12.6a1.1 1.1 0 0 1 0-1.2Z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              )}
             </button>
           </div>
 
