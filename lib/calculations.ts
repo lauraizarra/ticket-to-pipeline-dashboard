@@ -54,6 +54,21 @@ function toNumber(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+const INDIVIDUAL_ANNUAL_TICKET_TARGET = 24;
+const INDIVIDUAL_ANNUAL_PIPELINE_TARGET = 500000;
+
+const BUSINESS_UNIT_TARGETS: Record<string, { targetTickets: number; targetPipeline: number }> = {
+  "CLOUD EMX": { targetTickets: 456, targetPipeline: 9500000 },
+  "ONE TIME": { targetTickets: 336, targetPipeline: 7000000 },
+};
+
+const REGION_PIPELINE_TARGETS: Record<string, number> = {
+  SOLA: 7000000,
+  NOLA: 5000000,
+  MX: 2500000,
+  CARIBE: 2000000,
+};
+
 function isTrue(value: unknown): boolean {
   const text = normalizeText(value);
 
@@ -305,20 +320,26 @@ function getTicketBucket(ticket: Record<string, string>) {
 }
 
 function getGoalRows(goalsConfig: Record<string, string>[]) {
-  return goalsConfig.filter((row) => {
-    const type = normalizeText(getField(row, ["Tipo", "Type"]));
-    return type === "REGION" || type === "";
-  });
+  return goalsConfig.filter((row) =>
+    Object.values(row).some((value) => String(value || "").trim() !== "")
+  );
 }
 
 function getGoalTargetTickets(row: Record<string, string>) {
   return toNumber(
     getField(row, [
+      "Meta anual",
+      "Meta Anual",
+      "Annual target",
+      "Annual Target",
+      "Target anual",
+      "Meta total",
+      "Meta",
+      "Target tickets",
+      "Tickets target",
       "Meta prorrateada tickets",
       "Meta prorrateada HC tickets",
       "Meta restante",
-      "Target tickets",
-      "Tickets target",
     ])
   );
 }
@@ -326,11 +347,16 @@ function getGoalTargetTickets(row: Record<string, string>) {
 function getGoalTargetPipeline(row: Record<string, string>) {
   return toNumber(
     getField(row, [
-      "Valor prorrateado pipeline",
-      "Pipeline prorrateado",
-      "Meta pipeline prorrateada",
-      "Valor restante",
+      "Meta pipeline anual",
+      "Pipeline anual",
+      "Annual pipeline target",
+      "Pipeline target anual",
+      "Meta pipeline",
       "Pipeline target",
+      "Target pipeline",
+      "Pipeline",
+      "Valor pipeline anual",
+      "Valor pipeline",
     ])
   );
 }
@@ -350,11 +376,14 @@ function getGoalHc(row: Record<string, string>) {
 function getGoalIndividualTargetTickets(row: Record<string, string>) {
   const directValue = toNumber(
     getField(row, [
+      "Meta individual anual",
+      "Meta Individual Anual",
+      "Meta individual",
+      "Individual annual target",
+      "Individual target tickets",
       "Meta Individual Prorrateada",
       "Meta individual prorrateada",
-      "Meta individual",
       "Meta prorrateada individual",
-      "Individual target tickets",
     ])
   );
 
@@ -438,21 +467,14 @@ function getExecutiveTargetFromMapping(
   return matchingRows.reduce((sum, row) => {
     const target = toNumber(
       getField(row, [
-        "Meta esperada a la fecha",
-        "Meta Esperada a la Fecha",
-        "Meta esperada",
-        "Meta a la fecha",
-        "Meta 6M",
-        "Meta 6 meses",
-        "Meta semestral",
-        "Meta Semestral",
-        "Meta prorrateada",
-        "Meta prorrateada 6M",
-        "Meta restante",
         "Meta anual",
+        "Meta Anual",
+        "Meta individual anual",
+        "Meta Individual Anual",
+        "Annual target",
+        "Annual Target",
         "Meta",
         "Goal",
-        "Target 6M",
         "Target",
         "Objetivo",
       ])
@@ -470,23 +492,14 @@ function getExecutiveTarget(
   teamMapping: Record<string, string>[] = [],
   dashboardRows: Record<string, string>[] = []
 ) {
-  const targetFromGoals = getExecutiveTargetFromGoals(region, team, goalsConfig);
+  // La meta individual del programa es anual y fija:
+  // 24 tickets por persona incluida en meta.
+  // No usamos meta restante ni meta prorrateada para Performance individual.
+  return INDIVIDUAL_ANNUAL_TICKET_TARGET;
+}
 
-  if (targetFromGoals > 0) {
-    return targetFromGoals;
-  }
-
-  const targetFromMapping = getExecutiveTargetFromMapping(
-    executive,
-    teamMapping,
-    dashboardRows
-  );
-
-  if (targetFromMapping > 0) {
-    return targetFromMapping;
-  }
-
-  return 12;
+function getExecutivePipelineTarget() {
+  return INDIVIDUAL_ANNUAL_PIPELINE_TARGET;
 }
 
 function buildGoalTargets(
@@ -532,6 +545,25 @@ function buildGoalTargets(
     target.targetPipeline += targetPipeline;
   });
 
+  if (dimension === "region") {
+    Object.entries(REGION_PIPELINE_TARGETS).forEach(([region, targetPipeline]) => {
+      if (!targets.has(region)) {
+        targets.set(region, { targetTickets: 0, targetPipeline: 0 });
+      }
+
+      const target = targets.get(region)!;
+      target.targetPipeline = targetPipeline;
+    });
+  }
+
+  if (dimension === "team") {
+    targets.forEach((target) => {
+      if (target.targetPipeline <= 0 && target.targetTickets > 0) {
+        target.targetPipeline = (target.targetTickets / INDIVIDUAL_ANNUAL_TICKET_TARGET) * INDIVIDUAL_ANNUAL_PIPELINE_TARGET;
+      }
+    });
+  }
+
   return targets;
 }
 
@@ -564,8 +596,10 @@ export type ExecutivePerformance = {
   discarded: number;
   pipeline: number;
   target6M: number;
+  targetPipeline: number;
   conversionRate: number;
   complianceRate: number;
+  pipelineComplianceRate: number;
   details: {
     converted: TicketDetail[];
     waiting: TicketDetail[];
@@ -700,6 +734,7 @@ export function calculateDashboardMetrics(tickets: Record<string, string>[]) {
   ).length;
 
   const pipeline = validTickets.reduce((sum, ticket) => {
+    if (!isConverted(ticket)) return sum;
     return sum + getPipelineAmount(ticket);
   }, 0);
 
@@ -751,8 +786,10 @@ export function groupByExecutive(
           teamMapping,
           dashboardRows
         ),
+        targetPipeline: getExecutivePipelineTarget(),
         conversionRate: 0,
         complianceRate: 0,
+        pipelineComplianceRate: 0,
         details: {
           converted: [],
           waiting: [],
@@ -766,7 +803,10 @@ export function groupByExecutive(
     const detail = buildTicketDetail(ticket);
 
     row.tickets += 1;
-    row.pipeline += getPipelineAmount(ticket);
+
+    if (isConverted(ticket)) {
+      row.pipeline += getPipelineAmount(ticket);
+    }
 
     if (isExpiring(ticket)) {
       row.expiring += 1;
@@ -792,6 +832,7 @@ export function groupByExecutive(
       ...row,
       conversionRate: getConversionRate(row.converted, row.tickets),
       complianceRate: getComplianceRate(row.tickets, row.target6M),
+      pipelineComplianceRate: getComplianceRate(row.pipeline, row.targetPipeline),
     }))
     .sort((a, b) => {
       if (b.pipeline !== a.pipeline) return b.pipeline - a.pipeline;
@@ -840,10 +881,10 @@ export function groupComplianceByManager(
     const converted = isConverted(ticket);
 
     teamRow.actualTickets += 1;
-    teamRow.actualPipeline += pipeline;
 
     if (converted) {
       teamRow.convertedTickets += 1;
+      teamRow.actualPipeline += pipeline;
     }
 
     if (!teamRow.contributors.has(executive)) {
@@ -856,15 +897,187 @@ export function groupComplianceByManager(
 
     const contributor = teamRow.contributors.get(executive)!;
     contributor.tickets += 1;
-    contributor.pipeline += pipeline;
 
     if (converted) {
       contributor.convertedTickets += 1;
+      contributor.pipeline += pipeline;
     }
   });
 
   const targets = buildGoalTargets(goalsConfig, "team");
   const preferredOrder = ["TAM - FINOPS", "CPSM", "COM"];
+
+  const names = Array.from(
+    new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()])
+  ).filter((name) => targets.has(name) || actuals.has(name));
+
+  return names.map((name) => {
+    const actual = actuals.get(name) || {
+      actualTickets: 0,
+      convertedTickets: 0,
+      actualPipeline: 0,
+      contributors: new Map(),
+    };
+
+    const target = targets.get(name) || {
+      targetTickets: 0,
+      targetPipeline: 0,
+    };
+
+    const breakdown = Array.from(actual.contributors.entries())
+      .map(([contributorName, contributor]) => ({
+        name: contributorName,
+        tickets: contributor.tickets,
+        convertedTickets: contributor.convertedTickets,
+        conversionRate: getConversionRate(
+          contributor.convertedTickets,
+          contributor.tickets
+        ),
+        pipeline: contributor.pipeline,
+        shareRate: getShareRate(contributor.tickets, actual.actualTickets),
+      }))
+      .sort((a, b) => {
+        if (b.tickets !== a.tickets) return b.tickets - a.tickets;
+        return b.pipeline - a.pipeline;
+      });
+
+    return {
+      name,
+      actualTickets: actual.actualTickets,
+      convertedTickets: actual.convertedTickets,
+      targetTickets: target.targetTickets,
+      ticketComplianceRate: getComplianceRate(
+        actual.actualTickets,
+        target.targetTickets
+      ),
+      conversionRate: getConversionRate(
+        actual.convertedTickets,
+        actual.actualTickets
+      ),
+      actualPipeline: actual.actualPipeline,
+      targetPipeline: target.targetPipeline,
+      pipelineComplianceRate: getComplianceRate(
+        actual.actualPipeline,
+        target.targetPipeline
+      ),
+      breakdown,
+    };
+  });
+}
+
+
+function buildBusinessUnitTargets(goalsConfig: Record<string, string>[]) {
+  const targets = new Map<
+    string,
+    {
+      targetTickets: number;
+      targetPipeline: number;
+    }
+  >();
+
+  goalsConfig.forEach((row) => {
+    const unit = getBusinessUnit(row);
+    if (!unit || unit === "No mapeado") return;
+
+    const targetTickets = getGoalTargetTickets(row);
+    const targetPipeline = getGoalTargetPipeline(row);
+
+    if (targetTickets <= 0 && targetPipeline <= 0) return;
+
+    if (!targets.has(unit)) {
+      targets.set(unit, {
+        targetTickets: 0,
+        targetPipeline: 0,
+      });
+    }
+
+    const target = targets.get(unit)!;
+    target.targetTickets += targetTickets;
+    target.targetPipeline += targetPipeline;
+  });
+
+  Object.entries(BUSINESS_UNIT_TARGETS).forEach(([normalizedUnit, defaultTarget]) => {
+    const existingName = Array.from(targets.keys()).find(
+      (key) => normalizeText(key) === normalizedUnit
+    );
+
+    const displayName = existingName || (normalizedUnit === "CLOUD EMX" ? "Cloud EMx" : "One Time");
+
+    targets.set(displayName, {
+      targetTickets: defaultTarget.targetTickets,
+      targetPipeline: defaultTarget.targetPipeline,
+    });
+  });
+
+  return targets;
+}
+
+export function groupComplianceByBusinessUnit(
+  tickets: Record<string, string>[],
+  goalsConfig: Record<string, string>[] = []
+): TargetCompliance[] {
+  const actuals = new Map<
+    string,
+    {
+      actualTickets: number;
+      convertedTickets: number;
+      actualPipeline: number;
+      contributors: Map<
+        string,
+        {
+          tickets: number;
+          convertedTickets: number;
+          pipeline: number;
+        }
+      >;
+    }
+  >();
+
+  tickets.filter(shouldIncludeRow).forEach((ticket) => {
+    const businessUnit = getBusinessUnit(ticket);
+    const executive = getExecutiveName(ticket);
+
+    if (!businessUnit || businessUnit === "No mapeado") return;
+
+    if (!actuals.has(businessUnit)) {
+      actuals.set(businessUnit, {
+        actualTickets: 0,
+        convertedTickets: 0,
+        actualPipeline: 0,
+        contributors: new Map(),
+      });
+    }
+
+    const unitRow = actuals.get(businessUnit)!;
+    const pipeline = getPipelineAmount(ticket);
+    const converted = isConverted(ticket);
+
+    unitRow.actualTickets += 1;
+
+    if (converted) {
+      unitRow.convertedTickets += 1;
+      unitRow.actualPipeline += pipeline;
+    }
+
+    if (!unitRow.contributors.has(executive)) {
+      unitRow.contributors.set(executive, {
+        tickets: 0,
+        convertedTickets: 0,
+        pipeline: 0,
+      });
+    }
+
+    const contributor = unitRow.contributors.get(executive)!;
+    contributor.tickets += 1;
+
+    if (converted) {
+      contributor.convertedTickets += 1;
+      contributor.pipeline += pipeline;
+    }
+  });
+
+  const targets = buildBusinessUnitTargets(goalsConfig);
+  const preferredOrder = ["Cloud EMx", "One Time"];
 
   const names = Array.from(
     new Set([...preferredOrder, ...actuals.keys(), ...targets.keys()])
@@ -965,10 +1178,10 @@ export function groupComplianceByRegion(
     const converted = isConverted(ticket);
 
     regionRow.actualTickets += 1;
-    regionRow.actualPipeline += pipeline;
 
     if (converted) {
       regionRow.convertedTickets += 1;
+      regionRow.actualPipeline += pipeline;
     }
 
     if (!regionRow.businessUnits.has(businessUnit)) {
@@ -981,10 +1194,10 @@ export function groupComplianceByRegion(
 
     const unit = regionRow.businessUnits.get(businessUnit)!;
     unit.tickets += 1;
-    unit.pipeline += pipeline;
 
     if (converted) {
       unit.convertedTickets += 1;
+      unit.pipeline += pipeline;
     }
   });
 
