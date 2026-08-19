@@ -1,10 +1,8 @@
 "use client";
 
-import { CSSProperties, FormEvent, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { CSSProperties, FormEvent, useEffect, useState } from "react";
 
 const navy = "#121e43";
-const deep = "#041b36";
 const teal = "#00b296";
 const cyan = "#16b8c5";
 const muted = "#64748b";
@@ -179,14 +177,18 @@ const styles: Record<string, CSSProperties> = {
 };
 
 export default function LoginPage() {
-  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState("");
+  const [logoutMessage, setLogoutMessage] = useState(false);
+  const [nextPath, setNextPath] = useState("/");
 
-  const logoutMessage = searchParams.get("logout") === "1";
-  const nextPath = useMemo(() => searchParams.get("next") || "/", [searchParams]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setLogoutMessage(params.get("logout") === "1");
+    setNextPath(params.get("next") || "/");
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
