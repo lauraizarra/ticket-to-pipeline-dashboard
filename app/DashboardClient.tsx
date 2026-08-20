@@ -153,6 +153,188 @@ function SourceStatusBox({
   );
 }
 
+
+type SortDirection = "asc" | "desc";
+type StatusFilter = "all" | "converted" | "waiting" | "alerts" | "discarded";
+
+type ExecutiveSortKey =
+  | "executive"
+  | "tickets"
+  | "converted"
+  | "conversionRate"
+  | "pipeline"
+  | "complianceRate"
+  | "pipelineComplianceRate"
+  | "alerts";
+
+type ComplianceSortKey =
+  | "name"
+  | "actualTickets"
+  | "convertedTickets"
+  | "conversionRate"
+  | "actualPipeline"
+  | "ticketComplianceRate"
+  | "pipelineComplianceRate";
+
+function normalizeForSearch(value: unknown) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function uniqueOptions(values: Array<string | undefined>) {
+  return Array.from(
+    new Set(values.map((value) => String(value || "").trim()).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, "es"));
+}
+
+function allExecutiveTickets(row: ExecutivePerformance): TicketDetail[] {
+  const maybeExpiring = (row.details as { expiring?: TicketDetail[] }).expiring || [];
+
+  return [
+    ...(row.details.converted || []),
+    ...(row.details.waiting || []),
+    ...(row.details.expired || []),
+    ...(row.details.discarded || []),
+    ...maybeExpiring,
+  ];
+}
+
+function executiveSearchText(row: ExecutivePerformance) {
+  const tickets = allExecutiveTickets(row)
+    .map((ticket) =>
+      [
+        ticket.id,
+        ticket.name,
+        ticket.company,
+        ticket.description,
+        ticket.slaStatus,
+        ticket.businessUnit,
+        ticket.region,
+        ticket.team,
+        ticket.executive,
+      ].join(" ")
+    )
+    .join(" ");
+
+  return normalizeForSearch(
+    [
+      row.executive,
+      row.team,
+      row.businessUnit,
+      row.region,
+      row.tickets,
+      row.converted,
+      row.pipeline,
+      tickets,
+    ].join(" ")
+  );
+}
+
+function matchesExecutiveStatus(row: ExecutivePerformance, status: StatusFilter) {
+  if (status === "all") return true;
+  if (status === "converted") return row.converted > 0;
+  if (status === "waiting") return row.waiting > 0;
+  if (status === "alerts") return row.expired + row.expiring > 0;
+  if (status === "discarded") return row.discarded > 0;
+  return true;
+}
+
+function filterExecutives(
+  executives: ExecutivePerformance[],
+  filters: {
+    query: string;
+    region: string;
+    team: string;
+    businessUnit: string;
+    status: StatusFilter;
+  }
+) {
+  const query = normalizeForSearch(filters.query);
+
+  return executives.filter((row) => {
+    const matchesQuery = !query || executiveSearchText(row).includes(query);
+    const matchesRegion = !filters.region || row.region === filters.region;
+    const matchesTeam = !filters.team || row.team === filters.team;
+    const matchesUnit = !filters.businessUnit || row.businessUnit === filters.businessUnit;
+    const matchesStatus = matchesExecutiveStatus(row, filters.status);
+
+    return matchesQuery && matchesRegion && matchesTeam && matchesUnit && matchesStatus;
+  });
+}
+
+function sortExecutives(
+  rows: ExecutivePerformance[],
+  sortKey: ExecutiveSortKey,
+  direction: SortDirection
+) {
+  const multiplier = direction === "asc" ? 1 : -1;
+
+  return [...rows].sort((a, b) => {
+    if (sortKey === "executive") {
+      return a.executive.localeCompare(b.executive, "es") * multiplier;
+    }
+
+    const getValue = (row: ExecutivePerformance) => {
+      if (sortKey === "alerts") return row.expired + row.expiring;
+      return Number(row[sortKey] || 0);
+    };
+
+    return (getValue(a) - getValue(b)) * multiplier || a.executive.localeCompare(b.executive, "es");
+  });
+}
+
+function filterComplianceRows(rows: TargetCompliance[], query: string) {
+  const normalizedQuery = normalizeForSearch(query);
+
+  if (!normalizedQuery) return rows;
+
+  return rows.filter((row) => {
+    const breakdownText = row.breakdown
+      .map((item) => [item.name, item.tickets, item.convertedTickets, item.pipeline].join(" "))
+      .join(" ");
+
+    return normalizeForSearch([row.name, breakdownText].join(" ")).includes(normalizedQuery);
+  });
+}
+
+function sortComplianceRows(
+  rows: TargetCompliance[],
+  sortKey: ComplianceSortKey,
+  direction: SortDirection
+) {
+  const multiplier = direction === "asc" ? 1 : -1;
+
+  return [...rows].sort((a, b) => {
+    if (sortKey === "name") {
+      return a.name.localeCompare(b.name, "es") * multiplier;
+    }
+
+    return (Number(a[sortKey] || 0) - Number(b[sortKey] || 0)) * multiplier;
+  });
+}
+
+function paginate<T>(rows: T[], page: number, pageSize: number) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const start = (safePage - 1) * pageSize;
+
+  return {
+    rows: rows.slice(start, start + pageSize),
+    page: safePage,
+    totalPages,
+    start: rows.length === 0 ? 0 : start + 1,
+    end: Math.min(start + pageSize, rows.length),
+  };
+}
+
+function toggleDirection(currentKey: string, nextKey: string, direction: SortDirection): SortDirection {
+  if (currentKey !== nextKey) return "desc";
+  return direction === "asc" ? "desc" : "asc";
+}
+
 export default function DashboardClient({
   updatedAt,
   metrics,
@@ -164,7 +346,6 @@ export default function DashboardClient({
 }: Props) {
   const [activePage, setActivePage] = useState<PageKey>("overview");
 
-  const topExecutives = useMemo(() => executives.slice(0, 12), [executives]);
   const currentPage = pages.find((page) => page.key === activePage) || pages[0];
 
   return (
@@ -221,7 +402,7 @@ export default function DashboardClient({
           <OverviewPage
             metrics={metrics}
             alertsCount={alertsCount}
-            executives={topExecutives}
+            executives={executives}
           />
         )}
 
@@ -268,6 +449,16 @@ function OverviewPage({
   alertsCount: number;
   executives: ExecutivePerformance[];
 }) {
+  const [query, setQuery] = useState("");
+  const [region, setRegion] = useState("");
+  const [team, setTeam] = useState("");
+  const [businessUnit, setBusinessUnit] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [sortKey, setSortKey] = useState<ExecutiveSortKey>("pipeline");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   const kpis = [
     {
       title: "Tickets generados en total",
@@ -327,6 +518,49 @@ function OverviewPage({
     },
   ];
 
+  const filteredExecutives = useMemo(
+    () =>
+      filterExecutives(executives, {
+        query,
+        region,
+        team,
+        businessUnit,
+        status,
+      }),
+    [executives, query, region, team, businessUnit, status]
+  );
+
+  const sortedExecutives = useMemo(
+    () => sortExecutives(filteredExecutives, sortKey, sortDirection),
+    [filteredExecutives, sortKey, sortDirection]
+  );
+
+  const pagedExecutives = paginate(sortedExecutives, page, pageSize);
+
+  const options = useMemo(
+    () => ({
+      regions: uniqueOptions(executives.map((row) => row.region)),
+      teams: uniqueOptions(executives.map((row) => row.team)),
+      businessUnits: uniqueOptions(executives.map((row) => row.businessUnit)),
+    }),
+    [executives]
+  );
+
+  function handleExecutiveSort(nextKey: ExecutiveSortKey) {
+    setSortDirection(toggleDirection(sortKey, nextKey, sortDirection));
+    setSortKey(nextKey);
+    setPage(1);
+  }
+
+  function resetFilters() {
+    setQuery("");
+    setRegion("");
+    setTeam("");
+    setBusinessUnit("");
+    setStatus("all");
+    setPage(1);
+  }
+
   return (
     <>
       <section className="kpi-grid overview-kpis">
@@ -335,112 +569,241 @@ function OverviewPage({
         ))}
       </section>
 
-      <GoalsClarityPanel metrics={metrics} />
-
-      <RankingSection
-        title="Ranking general"
-        description="Lectura rápida de los líderes por tickets creados/gestionados, tickets convertidos y pipeline asociado."
-        items={executives.map((executive) => ({
-          name: executive.executive,
-          tickets: executive.tickets,
-          convertedTickets: executive.converted,
-          pipeline: executive.pipeline,
-        }))}
-      />
-
       <section className="panel performance-panel">
         <PanelHeader
           icon={`${ICON_BASE}/11_performance_individual.png`}
           title="Performance individual"
-          description="Ranking por pipeline asociado, tickets gestionados, cumplimiento anual de gestión y efectividad comercial. Se conserva la funcionalidad actual de detalle por estado."
-          aside={`Top ${executives.length} ejecutivos`}
+          description="Consulta el desempeño por ejecutivo. Usa búsqueda, filtros y ordenamiento para priorizar por cumplimiento, pipeline, tickets o alertas."
+          aside={`${formatNumber(filteredExecutives.length)} ejecutivos`}
         />
 
-        <div className="executive-grid">
-          {executives.map((executive) => (
+        <ExplorerToolbar
+          query={query}
+          onQueryChange={(value) => {
+            setQuery(value);
+            setPage(1);
+          }}
+          queryPlaceholder="Buscar ejecutivo, cuenta, ticket, deal o empresa..."
+          region={region}
+          onRegionChange={(value) => {
+            setRegion(value);
+            setPage(1);
+          }}
+          team={team}
+          onTeamChange={(value) => {
+            setTeam(value);
+            setPage(1);
+          }}
+          businessUnit={businessUnit}
+          onBusinessUnitChange={(value) => {
+            setBusinessUnit(value);
+            setPage(1);
+          }}
+          status={status}
+          onStatusChange={(value) => {
+            setStatus(value);
+            setPage(1);
+          }}
+          options={options}
+          onReset={resetFilters}
+        />
+
+        <div className="sort-bar">
+          <span>Ordenar por</span>
+          <SortButton active={sortKey === "executive"} direction={sortDirection} onClick={() => handleExecutiveSort("executive")}>Nombre</SortButton>
+          <SortButton active={sortKey === "complianceRate"} direction={sortDirection} onClick={() => handleExecutiveSort("complianceRate")}>Cumpl. tickets</SortButton>
+          <SortButton active={sortKey === "pipelineComplianceRate"} direction={sortDirection} onClick={() => handleExecutiveSort("pipelineComplianceRate")}>Cumpl. pipeline</SortButton>
+          <SortButton active={sortKey === "tickets"} direction={sortDirection} onClick={() => handleExecutiveSort("tickets")}>Tickets</SortButton>
+          <SortButton active={sortKey === "converted"} direction={sortDirection} onClick={() => handleExecutiveSort("converted")}>Convertidos</SortButton>
+          <SortButton active={sortKey === "pipeline"} direction={sortDirection} onClick={() => handleExecutiveSort("pipeline")}>Pipeline</SortButton>
+          <SortButton active={sortKey === "alerts"} direction={sortDirection} onClick={() => handleExecutiveSort("alerts")}>Alertas</SortButton>
+        </div>
+
+        <div className="executive-grid compact-executive-grid">
+          {pagedExecutives.rows.map((executive) => (
             <ExecutiveCard key={executive.executive} row={executive} />
           ))}
         </div>
 
-        {executives.length === 0 && <EmptyState text="Sin datos disponibles para performance individual." />}
+        <PaginationControls
+          page={pagedExecutives.page}
+          totalPages={pagedExecutives.totalPages}
+          pageSize={pageSize}
+          totalItems={sortedExecutives.length}
+          start={pagedExecutives.start}
+          end={pagedExecutives.end}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(1);
+          }}
+        />
+
+        {sortedExecutives.length === 0 && <EmptyState text="Sin resultados con los filtros seleccionados." />}
       </section>
     </>
   );
 }
 
-function GoalsClarityPanel({ metrics }: { metrics: DashboardMetrics }) {
-  const totalTicketTarget = 792;
-  const totalPipelineTarget = 16500000;
-  const ticketRate = rate(metrics.totalTickets, totalTicketTarget);
-  const pipelineRate = rate(metrics.pipeline, totalPipelineTarget);
-
-  const territoryGoals = [
-    { name: "SOLA", value: "US$ 7MM", tone: "green" },
-    { name: "NOLA", value: "US$ 5MM", tone: "blue" },
-    { name: "MX", value: "US$ 2,5MM", tone: "purple" },
-    { name: "Caribe", value: "US$ 2MM", tone: "teal" },
-  ];
-
+function ExplorerToolbar({
+  query,
+  onQueryChange,
+  queryPlaceholder,
+  region,
+  onRegionChange,
+  team,
+  onTeamChange,
+  businessUnit,
+  onBusinessUnitChange,
+  status,
+  onStatusChange,
+  options,
+  onReset,
+}: {
+  query: string;
+  onQueryChange: (value: string) => void;
+  queryPlaceholder: string;
+  region: string;
+  onRegionChange: (value: string) => void;
+  team: string;
+  onTeamChange: (value: string) => void;
+  businessUnit: string;
+  onBusinessUnitChange: (value: string) => void;
+  status: StatusFilter;
+  onStatusChange: (value: StatusFilter) => void;
+  options: { regions: string[]; teams: string[]; businessUnits: string[] };
+  onReset: () => void;
+}) {
   return (
-    <section className="goals-panel annual-goals-panel">
-      <PanelHeader
-        icon={`${ICON_BASE}/12_cumplimiento_por_gestor.png`}
-        title="Metas anuales"
-        description="Las metas se miden de forma anual por tickets gestionados y pipeline asociado."
-        aside="Meta anual"
-      />
+    <div className="explorer-toolbar">
+      <label className="search-control">
+        <span>Buscar</span>
+        <input
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder={queryPlaceholder}
+        />
+      </label>
 
-      <div className="goal-summary-grid annual-goal-summary-grid">
-        <div className="goal-summary-card highlighted">
-          <span>Meta individual</span>
-          <strong>24 tickets · US$ 500K</strong>
-          <p>Por cada persona incluida en meta.</p>
-        </div>
-        <div className="goal-summary-card">
-          <span>Cloud EMx</span>
-          <strong>456 tickets · US$ 9,5MM</strong>
-          <p>Meta anual de la unidad.</p>
-        </div>
-        <div className="goal-summary-card">
-          <span>One Time</span>
-          <strong>336 tickets · US$ 7MM</strong>
-          <p>Meta anual de la unidad.</p>
-        </div>
-        <div className="goal-summary-card">
-          <span>Avance general tickets</span>
-          <strong>{ticketRate}%</strong>
-          <p>{formatNumber(metrics.totalTickets)} de {formatNumber(totalTicketTarget)} tickets anuales.</p>
-        </div>
-        <div className="goal-summary-card">
-          <span>Avance general pipeline</span>
-          <strong>{pipelineRate}%</strong>
-          <p>{formatCompactCurrency(metrics.pipeline)} de {formatCompactCurrency(totalPipelineTarget)}.</p>
-        </div>
+      <div className="filter-controls">
+        <SelectControl label="Región" value={region} onChange={onRegionChange} options={options.regions} />
+        <SelectControl label="Equipo" value={team} onChange={onTeamChange} options={options.teams} />
+        <SelectControl label="Unidad" value={businessUnit} onChange={onBusinessUnitChange} options={options.businessUnits} />
+
+        <label className="select-control">
+          <span>Estado</span>
+          <select value={status} onChange={(event) => onStatusChange(event.target.value as StatusFilter)}>
+            <option value="all">Todos</option>
+            <option value="converted">Convertidos</option>
+            <option value="waiting">En gestión</option>
+            <option value="alerts">Alertas activas</option>
+            <option value="discarded">Descartados</option>
+          </select>
+        </label>
+
+        <button type="button" className="clear-filters-button" onClick={onReset}>
+          Limpiar filtros
+        </button>
       </div>
-
-      <div className="territory-goals-panel">
-        <div className="territory-headline">
-          <span>Metas de pipeline por territorio</span>
-          <p>Se usan para calcular cumplimiento regional de pipeline.</p>
-        </div>
-
-        <div className="territory-goal-grid">
-          {territoryGoals.map((goal) => (
-            <article className={`territory-goal-card territory-${goal.tone}`} key={goal.name}>
-              <div className="territory-icon">◎</div>
-              <div>
-                <span>{goal.name}</span>
-                <strong>{goal.value}</strong>
-                <p>Meta anual de pipeline regional.</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </div>
-    </section>
+    </div>
   );
 }
 
+function SelectControl({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+}) {
+  return (
+    <label className="select-control">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="">Todos</option>
+        {options.map((option) => (
+          <option value={option} key={`${label}-${option}`}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function SortButton({
+  active,
+  direction,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  direction: SortDirection;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button type="button" className={`sort-button ${active ? "active" : ""}`} onClick={onClick}>
+      {children}
+      {active && <span>{direction === "asc" ? "↑" : "↓"}</span>}
+    </button>
+  );
+}
+
+function PaginationControls({
+  page,
+  totalPages,
+  pageSize,
+  totalItems,
+  start,
+  end,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  page: number;
+  totalPages: number;
+  pageSize: number;
+  totalItems: number;
+  start: number;
+  end: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+}) {
+  return (
+    <div className="pagination-controls">
+      <p>
+        Mostrando <strong>{formatNumber(start)}</strong>–<strong>{formatNumber(end)}</strong> de{" "}
+        <strong>{formatNumber(totalItems)}</strong>
+      </p>
+
+      <div className="pagination-actions">
+        <label>
+          Ver
+          <select value={pageSize} onChange={(event) => onPageSizeChange(Number(event.target.value))}>
+            <option value={5}>5</option>
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+          </select>
+        </label>
+
+        <button type="button" onClick={() => onPageChange(Math.max(1, page - 1))} disabled={page <= 1}>
+          Anterior
+        </button>
+        <span>
+          {formatNumber(page)} / {formatNumber(totalPages)}
+        </span>
+        <button type="button" onClick={() => onPageChange(Math.min(totalPages, page + 1))} disabled={page >= totalPages}>
+          Siguiente
+        </button>
+      </div>
+    </div>
+  );
+}
 function CompliancePage({
   title,
   description,
@@ -454,13 +817,32 @@ function CompliancePage({
   icon: string;
   breakdownLabel: string;
 }) {
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState<ComplianceSortKey>("actualPipeline");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
   const actualTickets = total(rows, "actualTickets");
   const targetTickets = total(rows, "targetTickets");
   const convertedTickets = total(rows, "convertedTickets");
   const actualPipeline = total(rows, "actualPipeline");
   const targetPipeline = total(rows, "targetPipeline");
-  const complianceRate = rate(actualTickets, targetTickets);
+  const ticketComplianceRate = rate(actualTickets, targetTickets);
   const pipelineComplianceRate = rate(actualPipeline, targetPipeline);
+
+  const filteredRows = useMemo(() => filterComplianceRows(rows, query), [rows, query]);
+  const sortedRows = useMemo(
+    () => sortComplianceRows(filteredRows, sortKey, sortDirection),
+    [filteredRows, sortKey, sortDirection]
+  );
+  const pagedRows = paginate(sortedRows, page, pageSize);
+
+  function handleSort(nextKey: ComplianceSortKey) {
+    setSortDirection(toggleDirection(sortKey, nextKey, sortDirection));
+    setSortKey(nextKey);
+    setPage(1);
+  }
 
   return (
     <>
@@ -481,10 +863,10 @@ function CompliancePage({
         />
         <KpiCard
           title="Cumplimiento anual"
-          value={`${complianceRate}%`}
+          value={`${ticketComplianceRate}%`}
           description="Tickets gestionados divididos entre tickets esperados anuales."
-          icon={icon}
-          tone={complianceRate >= 100 ? "green" : complianceRate >= 50 ? "amber" : "red"}
+          icon={`${ICON_BASE}/03_efectividad_comercial.png`}
+          tone={ticketComplianceRate >= 100 ? "green" : ticketComplianceRate >= 50 ? "amber" : "red"}
         />
         <KpiCard
           title="Pipeline asociado"
@@ -497,7 +879,7 @@ function CompliancePage({
           title="Meta pipeline anual"
           value={formatCompactCurrency(targetPipeline)}
           description="Meta anual de pipeline para esta vista."
-          icon={`${ICON_BASE}/04_pipeline_asociado.png`}
+          icon={`${ICON_BASE}/08_alertas_activas.png`}
           tone="purple"
         />
         <KpiCard
@@ -522,28 +904,55 @@ function CompliancePage({
           tone="navy"
         />
       </section>
-
-      <RankingSection
-        title="Ranking de cumplimiento"
-        description="Ordena esta vista por tickets creados/gestionados, tickets convertidos y pipeline asociado."
-        items={rows.map((row) => ({
-          name: row.name,
-          tickets: row.actualTickets,
-          convertedTickets: row.convertedTickets,
-          pipeline: row.actualPipeline,
-        }))}
-      />
-
-      <section className="panel">
+<section className="panel">
         <PanelHeader icon={icon} title={title} description={description} aside="Meta anual" />
 
+        <div className="compact-control-row">
+          <label className="search-control">
+            <span>Buscar</span>
+            <input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setPage(1);
+              }}
+              placeholder="Buscar equipo, unidad, región o contribuidor..."
+            />
+          </label>
+        </div>
+
+        <div className="sort-bar">
+          <span>Ordenar por</span>
+          <SortButton active={sortKey === "name"} direction={sortDirection} onClick={() => handleSort("name")}>Nombre</SortButton>
+          <SortButton active={sortKey === "actualTickets"} direction={sortDirection} onClick={() => handleSort("actualTickets")}>Tickets</SortButton>
+          <SortButton active={sortKey === "convertedTickets"} direction={sortDirection} onClick={() => handleSort("convertedTickets")}>Convertidos</SortButton>
+          <SortButton active={sortKey === "conversionRate"} direction={sortDirection} onClick={() => handleSort("conversionRate")}>Efectividad</SortButton>
+          <SortButton active={sortKey === "actualPipeline"} direction={sortDirection} onClick={() => handleSort("actualPipeline")}>Pipeline</SortButton>
+          <SortButton active={sortKey === "ticketComplianceRate"} direction={sortDirection} onClick={() => handleSort("ticketComplianceRate")}>Cumpl. tickets</SortButton>
+          <SortButton active={sortKey === "pipelineComplianceRate"} direction={sortDirection} onClick={() => handleSort("pipelineComplianceRate")}>Cumpl. pipeline</SortButton>
+        </div>
+
         <div className="compliance-list">
-          {rows.map((row) => (
+          {pagedRows.rows.map((row) => (
             <ComplianceCard key={row.name} row={row} breakdownLabel={breakdownLabel} />
           ))}
         </div>
 
-        {rows.length === 0 && <EmptyState text="Sin datos disponibles para calcular cumplimiento." />}
+        <PaginationControls
+          page={pagedRows.page}
+          totalPages={pagedRows.totalPages}
+          pageSize={pageSize}
+          totalItems={sortedRows.length}
+          start={pagedRows.start}
+          end={pagedRows.end}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(1);
+          }}
+        />
+
+        {sortedRows.length === 0 && <EmptyState text="Sin resultados con los filtros seleccionados." />}
       </section>
     </>
   );
@@ -601,101 +1010,126 @@ function PanelHeader({
   );
 }
 
+
 function ExecutiveCard({ row }: { row: ExecutivePerformance }) {
   const [openBucket, setOpenBucket] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const ticketProgress = Math.min(row.complianceRate, 100);
   const pipelineProgress = Math.min(row.pipelineComplianceRate, 100);
   const ticketsNeeded = Math.max(Number(row.target6M || 0) - Number(row.tickets || 0), 0);
   const ticketTone = complianceTone(row.complianceRate);
   const pipelineTone = complianceTone(row.pipelineComplianceRate);
+  const alertCount = row.expired + row.expiring;
 
   function toggleBucket(bucketKey: string) {
     setOpenBucket((current) => (current === bucketKey ? null : bucketKey));
   }
 
   return (
-    <article className="executive-card refined-executive-card">
-      <div className="card-topline refined-card-topline">
-        <div>
-          <h4>{row.executive}</h4>
-          <p>{row.team || "Sin equipo"} · {row.businessUnit || "Sin unidad"} · {row.region || "Sin región"}</p>
+    <article className={`executive-card refined-executive-card interactive-executive-card ${expanded ? "expanded" : ""}`}>
+      <button
+        type="button"
+        className="executive-summary-button"
+        onClick={() => setExpanded((current) => !current)}
+        aria-expanded={expanded}
+      >
+        <div className="card-topline refined-card-topline compact-card-topline">
+          <div>
+            <h4>{row.executive}</h4>
+            <p>{row.team || "Sin equipo"} · {row.businessUnit || "Sin unidad"} · {row.region || "Sin región"}</p>
+          </div>
+          <span className="expand-hint">{expanded ? "Contraer" : "Ver detalle"}</span>
         </div>
-        <span className={`status-pill ${ticketTone}`}>
-          {row.complianceRate}%
-        </span>
-      </div>
 
-      <div className="progress-block main-progress-block">
-        <div>
-          <span>Cumplimiento anual tickets: {formatNumber(row.tickets)} / {formatNumber(row.target6M)}</span>
-          <span className={`status-pill progress-pill ${ticketTone}`}>{complianceLabel(row.complianceRate)}</span>
+        <div className="executive-compact-metrics">
+          <div>
+            <span>Cumplimiento tickets</span>
+            <strong className={`status-pill ${ticketTone}`}>{row.complianceRate}%</strong>
+            <small>{formatNumber(row.tickets)} / {formatNumber(row.target6M)} tickets</small>
+          </div>
+          <div>
+            <span>Cumplimiento pipeline</span>
+            <strong className={`status-pill ${pipelineTone}`}>{row.pipelineComplianceRate}%</strong>
+            <small>{formatCompactCurrency(row.pipeline)} / {formatCompactCurrency(row.targetPipeline)}</small>
+          </div>
         </div>
-        <div className="progress-track">
-          <div className="progress-fill" style={{ width: `${ticketProgress}%` }} />
+      </button>
+
+      {expanded && (
+        <div className="executive-expanded-content">
+          <div className="progress-block main-progress-block">
+            <div>
+              <span>Cumplimiento anual tickets: {formatNumber(row.tickets)} / {formatNumber(row.target6M)}</span>
+              <span className={`status-pill progress-pill ${ticketTone}`}>{complianceLabel(row.complianceRate)}</span>
+            </div>
+            <div className="progress-track">
+              <div className="progress-fill" style={{ width: `${ticketProgress}%` }} />
+            </div>
+          </div>
+
+          <div className="mini-grid four executive-ticket-summary">
+            <MiniMetric label="Gestionados" value={formatNumber(row.tickets)} />
+            <MiniMetric label="Convertidos" value={formatNumber(row.converted)} />
+            <MiniMetric label="Efectividad comercial" value={`${row.conversionRate}%`} />
+            <MiniMetric label="Necesarios para meta" value={formatNumber(ticketsNeeded)} />
+          </div>
+
+          <div className="progress-block secondary pipeline-progress-block">
+            <div>
+              <span>Cumplimiento pipeline: {formatCompactCurrency(row.pipeline)} / {formatCompactCurrency(row.targetPipeline)}</span>
+              <span className={`status-pill progress-pill ${pipelineTone}`}>{row.pipelineComplianceRate}%</span>
+            </div>
+            <div className="progress-track">
+              <div className="progress-fill pipeline" style={{ width: `${pipelineProgress}%` }} />
+            </div>
+          </div>
+
+          <div className="mini-grid two executive-pipeline-summary">
+            <MiniMetric label="Pipeline" value={formatCompactCurrency(row.pipeline)} />
+            <MiniMetric label="Meta pipeline" value={formatCompactCurrency(row.targetPipeline)} />
+          </div>
+
+          <div className="ticket-buckets refined-ticket-buckets">
+            <TicketBucketDetails
+              bucketKey="converted"
+              title="Convertidos"
+              count={row.converted}
+              tickets={row.details.converted || []}
+              tone="green"
+              isOpen={openBucket === "converted"}
+              onToggle={toggleBucket}
+            />
+            <TicketBucketDetails
+              bucketKey="waiting"
+              title="En gestión"
+              count={row.waiting}
+              tickets={row.details.waiting || []}
+              tone="blue"
+              isOpen={openBucket === "waiting"}
+              onToggle={toggleBucket}
+            />
+            <TicketBucketDetails
+              bucketKey="alerts"
+              title="Alertas activas"
+              count={alertCount}
+              tickets={[...(row.details.expired || []), ...(((row.details as { expiring?: TicketDetail[] }).expiring) || [])]}
+              tone="red"
+              isOpen={openBucket === "alerts"}
+              onToggle={toggleBucket}
+            />
+            <TicketBucketDetails
+              bucketKey="discarded"
+              title="Descartados"
+              count={row.discarded}
+              tickets={row.details.discarded || []}
+              tone="slate"
+              isOpen={openBucket === "discarded"}
+              onToggle={toggleBucket}
+            />
+          </div>
         </div>
-      </div>
-
-      <div className="mini-grid four executive-ticket-summary">
-        <MiniMetric label="Gestionados" value={formatNumber(row.tickets)} />
-        <MiniMetric label="Convertidos" value={formatNumber(row.converted)} />
-        <MiniMetric label="Efectividad comercial" value={`${row.conversionRate}%`} />
-        <MiniMetric label="Necesarios para meta" value={formatNumber(ticketsNeeded)} />
-      </div>
-
-      <div className="progress-block secondary pipeline-progress-block">
-        <div>
-          <span>Cumplimiento pipeline: {formatCompactCurrency(row.pipeline)} / {formatCompactCurrency(row.targetPipeline)}</span>
-          <span className={`status-pill progress-pill ${pipelineTone}`}>{row.pipelineComplianceRate}%</span>
-        </div>
-        <div className="progress-track">
-          <div className="progress-fill pipeline" style={{ width: `${pipelineProgress}%` }} />
-        </div>
-      </div>
-
-      <div className="mini-grid two executive-pipeline-summary">
-        <MiniMetric label="Pipeline" value={formatCompactCurrency(row.pipeline)} />
-        <MiniMetric label="Meta pipeline" value={formatCompactCurrency(row.targetPipeline)} />
-      </div>
-
-      <div className="ticket-buckets refined-ticket-buckets">
-        <TicketBucketDetails
-          bucketKey="converted"
-          title="Convertidos"
-          count={row.converted}
-          tickets={row.details.converted || []}
-          tone="green"
-          isOpen={openBucket === "converted"}
-          onToggle={toggleBucket}
-        />
-        <TicketBucketDetails
-          bucketKey="waiting"
-          title="En gestión"
-          count={row.waiting}
-          tickets={row.details.waiting || []}
-          tone="blue"
-          isOpen={openBucket === "waiting"}
-          onToggle={toggleBucket}
-        />
-        <TicketBucketDetails
-          bucketKey="alerts"
-          title="Alertas activas"
-          count={row.expired + row.expiring}
-          tickets={[...(row.details.expired || []), ...(row.details.expiring || [])]}
-          tone="red"
-          isOpen={openBucket === "alerts"}
-          onToggle={toggleBucket}
-        />
-        <TicketBucketDetails
-          bucketKey="discarded"
-          title="Descartados"
-          count={row.discarded}
-          tickets={row.details.discarded || []}
-          tone="slate"
-          isOpen={openBucket === "discarded"}
-          onToggle={toggleBucket}
-        />
-      </div>
+      )}
     </article>
   );
 }
@@ -708,6 +1142,7 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+
 
 function TicketBucketDetails({
   bucketKey,
@@ -726,7 +1161,41 @@ function TicketBucketDetails({
   isOpen: boolean;
   onToggle: (bucketKey: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState<"name" | "company" | "slaStatus" | "pipeline">("pipeline");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [page, setPage] = useState(1);
   const safeTickets = Array.isArray(tickets) ? tickets : [];
+
+  const filteredTickets = safeTickets.filter((ticket) =>
+    normalizeForSearch([
+      ticket.name,
+      ticket.company,
+      ticket.description,
+      ticket.slaStatus,
+      ticket.pipeline,
+      ticket.id,
+    ].join(" ")).includes(normalizeForSearch(query))
+  );
+
+  const sortedTickets = [...filteredTickets].sort((a, b) => {
+    const multiplier = sortDirection === "asc" ? 1 : -1;
+
+    if (sortKey === "pipeline") {
+      return (a.pipeline - b.pipeline) * multiplier;
+    }
+
+    return String(a[sortKey] || "").localeCompare(String(b[sortKey] || ""), "es") * multiplier;
+  });
+
+  const pagedTickets = paginate(sortedTickets, page, 5);
+
+  function handleSort(nextKey: "name" | "company" | "slaStatus" | "pipeline") {
+    setSortDirection(toggleDirection(sortKey, nextKey, sortDirection));
+    setSortKey(nextKey);
+    setPage(1);
+  }
+
   const modal = isOpen && typeof document !== "undefined"
     ? createPortal(
         <div
@@ -751,17 +1220,46 @@ function TicketBucketDetails({
               </button>
             </div>
 
+            <div className="modal-toolbar">
+              <label className="search-control">
+                <span>Buscar ticket</span>
+                <input
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Buscar ticket, cuenta, empresa o estado..."
+                />
+              </label>
+
+              <div className="sort-bar compact">
+                <span>Ordenar</span>
+                <SortButton active={sortKey === "name"} direction={sortDirection} onClick={() => handleSort("name")}>Ticket</SortButton>
+                <SortButton active={sortKey === "company"} direction={sortDirection} onClick={() => handleSort("company")}>Empresa</SortButton>
+                <SortButton active={sortKey === "slaStatus"} direction={sortDirection} onClick={() => handleSort("slaStatus")}>Estado</SortButton>
+                <SortButton active={sortKey === "pipeline"} direction={sortDirection} onClick={() => handleSort("pipeline")}>Pipeline</SortButton>
+              </div>
+            </div>
+
             <div className="ticket-detail-list">
-              {safeTickets.slice(0, 10).map((ticket, index) => (
+              {pagedTickets.rows.map((ticket, index) => (
                 <TicketDetailItem key={`${ticket.id}-${index}`} ticket={ticket} />
               ))}
 
-              {safeTickets.length > 10 && (
-                <p className="more-note">Se muestran 10 de {formatNumber(safeTickets.length)} tickets.</p>
-              )}
-
-              {safeTickets.length === 0 && <p className="more-note">Sin tickets en esta categoría.</p>}
+              {pagedTickets.rows.length === 0 && <p className="more-note">Sin tickets en esta categoría.</p>}
             </div>
+
+            <PaginationControls
+              page={pagedTickets.page}
+              totalPages={pagedTickets.totalPages}
+              pageSize={5}
+              totalItems={sortedTickets.length}
+              start={pagedTickets.start}
+              end={pagedTickets.end}
+              onPageChange={setPage}
+              onPageSizeChange={() => undefined}
+            />
           </div>
         </div>,
         document.body
@@ -808,6 +1306,7 @@ function TicketDetailItem({ ticket }: { ticket: TicketDetail }) {
     </article>
   );
 }
+
 
 function ComplianceCard({
   row,
@@ -860,36 +1359,114 @@ function ComplianceCard({
           <MiniMetric label="Meta pipeline" value={formatCompactCurrency(row.targetPipeline)} />
         </div>
 
-        <div className="breakdown-table-wrap">
-          <h5>{breakdownLabel}</h5>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Nombre</th>
-                <th>Tickets</th>
-                <th>Convertidos</th>
-                <th>Efectividad</th>
-                <th>Pipeline</th>
-                <th>Participación</th>
-              </tr>
-            </thead>
-            <tbody>
-              {row.breakdown.map((item) => (
-                <tr key={item.name}>
-                  <td>{item.name}</td>
-                  <td>{formatNumber(item.tickets)}</td>
-                  <td>{formatNumber(item.convertedTickets)}</td>
-                  <td>{item.conversionRate}%</td>
-                  <td>{formatCompactCurrency(item.pipeline)}</td>
-                  <td>{item.shareRate}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {row.breakdown.length === 0 && <EmptyState text="Sin detalle disponible." />}
-        </div>
+        <BreakdownTable title={breakdownLabel} rows={row.breakdown} />
       </div>
     </details>
+  );
+}
+
+function BreakdownTable({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: {
+    name: string;
+    tickets: number;
+    convertedTickets: number;
+    conversionRate: number;
+    pipeline: number;
+    shareRate: number;
+  }[];
+}) {
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState<"name" | "tickets" | "convertedTickets" | "conversionRate" | "pipeline" | "shareRate">("pipeline");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const filteredRows = rows.filter((row) =>
+    normalizeForSearch([row.name, row.tickets, row.convertedTickets, row.pipeline].join(" ")).includes(normalizeForSearch(query))
+  );
+
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    const multiplier = sortDirection === "asc" ? 1 : -1;
+
+    if (sortKey === "name") {
+      return a.name.localeCompare(b.name, "es") * multiplier;
+    }
+
+    return (Number(a[sortKey] || 0) - Number(b[sortKey] || 0)) * multiplier;
+  });
+
+  const pagedRows = paginate(sortedRows, page, pageSize);
+
+  function handleSort(nextKey: "name" | "tickets" | "convertedTickets" | "conversionRate" | "pipeline" | "shareRate") {
+    setSortDirection(toggleDirection(sortKey, nextKey, sortDirection));
+    setSortKey(nextKey);
+    setPage(1);
+  }
+
+  return (
+    <div className="breakdown-table-wrap">
+      <div className="table-headline">
+        <h5>{title}</h5>
+        <label className="search-control compact-search">
+          <span>Buscar</span>
+          <input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setPage(1);
+            }}
+            placeholder="Buscar contribuidor..."
+          />
+        </label>
+      </div>
+
+      <div className="table-scroll">
+        <table className="data-table interactive-table">
+          <thead>
+            <tr>
+              <th><button type="button" onClick={() => handleSort("name")}>Nombre {sortKey === "name" ? (sortDirection === "asc" ? "↑" : "↓") : ""}</button></th>
+              <th><button type="button" onClick={() => handleSort("tickets")}>Tickets {sortKey === "tickets" ? (sortDirection === "asc" ? "↑" : "↓") : ""}</button></th>
+              <th><button type="button" onClick={() => handleSort("convertedTickets")}>Convertidos {sortKey === "convertedTickets" ? (sortDirection === "asc" ? "↑" : "↓") : ""}</button></th>
+              <th><button type="button" onClick={() => handleSort("conversionRate")}>Efectividad {sortKey === "conversionRate" ? (sortDirection === "asc" ? "↑" : "↓") : ""}</button></th>
+              <th><button type="button" onClick={() => handleSort("pipeline")}>Pipeline {sortKey === "pipeline" ? (sortDirection === "asc" ? "↑" : "↓") : ""}</button></th>
+              <th><button type="button" onClick={() => handleSort("shareRate")}>Participación {sortKey === "shareRate" ? (sortDirection === "asc" ? "↑" : "↓") : ""}</button></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pagedRows.rows.map((item) => (
+              <tr key={item.name}>
+                <td>{item.name}</td>
+                <td>{formatNumber(item.tickets)}</td>
+                <td>{formatNumber(item.convertedTickets)}</td>
+                <td>{item.conversionRate}%</td>
+                <td>{formatCompactCurrency(item.pipeline)}</td>
+                <td>{item.shareRate}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <PaginationControls
+        page={pagedRows.page}
+        totalPages={pagedRows.totalPages}
+        pageSize={pageSize}
+        totalItems={sortedRows.length}
+        start={pagedRows.start}
+        end={pagedRows.end}
+        onPageChange={setPage}
+        onPageSizeChange={(value) => {
+          setPageSize(value);
+          setPage(1);
+        }}
+      />
+
+      {sortedRows.length === 0 && <EmptyState text="Sin detalle disponible." />}
+    </div>
   );
 }
 
@@ -899,82 +1476,6 @@ type RankingItem = {
   convertedTickets: number;
   pipeline: number;
 };
-
-function RankingSection({
-  title,
-  description,
-  items,
-}: {
-  title: string;
-  description: string;
-  items: RankingItem[];
-}) {
-  const byTickets = [...items]
-    .sort((a, b) => b.tickets - a.tickets || b.pipeline - a.pipeline)
-    .slice(0, 5);
-
-  const byConverted = [...items]
-    .sort((a, b) => b.convertedTickets - a.convertedTickets || b.pipeline - a.pipeline)
-    .slice(0, 5);
-
-  const byPipeline = [...items]
-    .sort((a, b) => b.pipeline - a.pipeline || b.tickets - a.tickets)
-    .slice(0, 5);
-
-  return (
-    <section className="panel ranking-section">
-      <PanelHeader
-        icon={`${ICON_BASE}/03_efectividad_comercial.png`}
-        title={title}
-        description={description}
-        aside="Top 5"
-      />
-
-      <div className="ranking-grid">
-        <RankingList title="Tickets creados" items={byTickets} metric="tickets" />
-        <RankingList title="Tickets convertidos" items={byConverted} metric="converted" />
-        <RankingList title="Pipeline asociado" items={byPipeline} metric="pipeline" />
-      </div>
-    </section>
-  );
-}
-
-function RankingList({
-  title,
-  items,
-  metric,
-}: {
-  title: string;
-  items: RankingItem[];
-  metric: "tickets" | "converted" | "pipeline";
-}) {
-  return (
-    <div className="ranking-card">
-      <h4>{title}</h4>
-
-      <div className="ranking-list">
-        {items.map((item, index) => {
-          const value =
-            metric === "tickets"
-              ? formatNumber(item.tickets)
-              : metric === "converted"
-                ? formatNumber(item.convertedTickets)
-                : formatCompactCurrency(item.pipeline);
-
-          return (
-            <div className="ranking-row" key={`${title}-${item.name}`}>
-              <span className="ranking-position">#{index + 1}</span>
-              <span className="ranking-name">{item.name}</span>
-              <strong>{value}</strong>
-            </div>
-          );
-        })}
-
-        {items.length === 0 && <p className="more-note">Sin datos disponibles.</p>}
-      </div>
-    </div>
-  );
-}
 
 function EmptyState({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
